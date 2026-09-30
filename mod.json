@@ -6,7 +6,7 @@
   "version": "v1.0.0",
   "developer": "flim",
   "description": "Smooth level showcase recording via FFmpeg API",
-  "dependencies": {
+  "dependencies": [
     { "id": "eclipse.ffmpeg-api", "version": ">=1.0.0", "importance": "required" }
-  }
+  ]
 }
