@@ -1,4 +1,4 @@
-#include "../RenderSettings.hpp"
+#include "RenderSettings.hpp"
 
 #include <Geode/loader/Mod.hpp>
 #include <algorithm>
