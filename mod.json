@@ -1,12 +1,17 @@
 {
-  "geode": "5.10.1",
-  "gd": { "android": "2.2081" },
-  "id": "flim.showcase-recorder",
-  "name": "Showcase Recorder",
-  "version": "v1.0.0",
-  "developer": "flim",
-  "description": "Smooth level showcase recording via FFmpeg API",
-  "dependencies": [
-    { "id": "eclipse.ffmpeg-api", "version": ">=1.0.0", "importance": "required" }
-  ]
+	"geode": "5.10.1",
+	"gd": {
+		"android": "2.2081"
+	},
+	"id": "flim.showcase-recorder",
+	"name": "Showcase Recorder",
+	"version": "v1.0.0",
+	"developer": "flim",
+	"description": "Smooth offline level showcase recording via FFmpeg API.",
+	"dependencies": {
+		"eclipse.ffmpeg-api": {
+			"version": ">=1.0.0",
+			"importance": "required"
+		}
+	}
 }
