@@ -2,6 +2,8 @@
 #include "../RenderSettings.hpp"
 #include "../Recorder.hpp"
 
+#include <Geode/ui/TextInput.hpp>
+
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -51,14 +53,14 @@ SettingsPopup* SettingsPopup::create() {
 }
 
 bool SettingsPopup::init() {
-	if (!Popup::init(340.f, 296.f)) return false;
+	if (!Popup::init(340.f, 360.f)) return false;
 	s_open = true;
 
 	this->setTitle("Render Settings");
 
 	auto* s = &RenderSettings::current();
 
-	float y = 96.f;
+	float y = 124.f;
 	constexpr float dy = 24.f;
 
 	this->addStepperRow("Video FPS", y,
@@ -102,7 +104,17 @@ bool SettingsPopup::init() {
 		[s] { return s->fadeOut <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeOut); },
 		[s](int d) { s->fadeOut = std::clamp(s->fadeOut + d * 0.5f, 0.f, 30.f); commit(); });
 
-	// Кнопка запуска записи: стартуем, закрываем окно, дальше жмём Resume
+	// Строки с дополнительными аргументами для видео и аудио
+	y -= 36.f;
+	this->addTextRow("Video args", y, s->videoArgs,
+		[s](std::string const& text) { s->videoArgs = text; commit(); });
+	y -= 32.f;
+
+	this->addTextRow("Audio args", y, s->audioArgs,
+		[s](std::string const& text) { s->audioArgs = text; commit(); });
+
+	// Кнопка запуска записи: стартуем, закрываем окно и перезапускаем уровень,
+	// потому что звук берётся с начала трека
 	auto recSprite = ButtonSprite::create("Start recording");
 	recSprite->setScale(0.8f);
 	auto recBtn = CCMenuItemExt::createSpriteExtra(recSprite, [this](auto*) {
@@ -110,10 +122,15 @@ bool SettingsPopup::init() {
 			Notification::create("Could not start recording", NotificationIcon::Error)->show();
 			return;
 		}
-		Notification::create("Recording started. Press Resume", NotificationIcon::Success)->show();
+		Notification::create("Recording started", NotificationIcon::Success)->show();
 		this->keyBackClicked();
+
+		// Перезапуск уровня из паузы: запись и музыка начинаются с начала
+		if (auto pause = CCScene::get()->getChildByType<PauseLayer>(0)) {
+			pause->onRestart(nullptr);
+		}
 	});
-	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -113.f});
+	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -146.f});
 
 	return true;
 }
@@ -154,6 +171,24 @@ void SettingsPopup::addStepperRow(
 
 	m_buttonMenu->addChildAtPosition(left, Anchor::Center, {8.f, y});
 	m_buttonMenu->addChildAtPosition(right, Anchor::Center, {124.f, y});
+}
+
+void SettingsPopup::addTextRow(
+	char const* title, float y, std::string const& initial,
+	std::function<void(std::string const&)> onChange
+) {
+	float half = m_size.width / 2.f;
+
+	auto name = CCLabelBMFont::create(title, "bigFont.fnt");
+	name->setScale(0.4f);
+	name->setAnchorPoint({0.f, 0.5f});
+	m_mainLayer->addChildAtPosition(name, Anchor::Center, {-half + 16.f, y});
+
+	auto input = TextInput::create(150.f, "extra args", "chatFont.fnt");
+	input->setMaxCharCount(300);
+	input->setString(initial, false);
+	input->setCallback([onChange](std::string const& text) { onChange(text); });
+	m_mainLayer->addChildAtPosition(input, Anchor::Center, {66.f, y});
 }
 
 void SettingsPopup::addToggleRow(

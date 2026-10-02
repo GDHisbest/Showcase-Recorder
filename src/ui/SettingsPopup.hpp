@@ -21,6 +21,12 @@ protected:
 		std::function<void(int)> step
 	);
 
+	// Строка: название слева, поле ввода текста справа
+	void addTextRow(
+		char const* title, float y, std::string const& initial,
+		std::function<void(std::string const&)> onChange
+	);
+
 	// Строка: название слева, переключатель справа
 	void addToggleRow(char const* title, float y, bool initial, std::function<void(bool)> onChange);
 
