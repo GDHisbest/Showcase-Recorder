@@ -44,6 +44,8 @@ bool Recorder::start() {
 	m_frames = 0;
 	m_stopAtFrame = -1;
 	m_levelUpdated = false;
+	m_ticks = 0;
+	m_levelTicks = 0;
 
 	// Offscreen-текстура нужного размера: в неё рисуем уровень для каждого кадра
 	m_texture = CCRenderTexture::create(m_width, m_height, kCCTexture2DPixelFormat_RGBA8888);
@@ -85,11 +87,18 @@ void Recorder::stopAfter(float seconds) {
 void Recorder::endTick() {
 	if (!m_recording) return;
 
+	++m_ticks;
 	bool updated = m_levelUpdated;
 	m_levelUpdated = false;
 	if (!updated) return; // пауза или экран без уровня: кадр не пишем
+	++m_levelTicks;
 
-	if (auto layer = PlayLayer::get()) this->captureFrame(layer);
+	auto layer = PlayLayer::get();
+	if (!layer) {
+		log::warn("Showcase Recorder: level updated but PlayLayer::get() is null");
+		return;
+	}
+	this->captureFrame(layer);
 }
 
 void Recorder::captureFrame(PlayLayer* layer) {
@@ -145,7 +154,8 @@ void Recorder::stop() {
 	m_pixels.clear();
 	m_pixels.shrink_to_fit();
 
-	log::info("Showcase Recorder: stopped, {} frames -> {}", m_frames, m_output.string());
+	log::info("Showcase Recorder: stopped, ticks={}, level ticks={}, frames={} -> {}",
+		m_ticks, m_levelTicks, m_frames, m_output.string());
 	Notification::create(
 		fmt::format("Saved: {}", m_output.filename().string()),
 		NotificationIcon::Success

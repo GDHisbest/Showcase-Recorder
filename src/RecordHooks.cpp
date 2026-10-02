@@ -24,9 +24,10 @@ class $modify(SRScheduler, CCScheduler) {
 };
 
 class $modify(SRPlayLayer, PlayLayer) {
-	// Вызывается один раз за тик, пока уровень не на паузе
-	void update(float dt) {
-		PlayLayer::update(dt);
+	// Вызывается, пока уровень идёт (на паузе не вызывается). За тик может
+	// вызваться несколько раз, поэтому только ставим флаг, а кадр пишет endTick.
+	void postUpdate(float dt) {
+		PlayLayer::postUpdate(dt);
 		sr::Recorder::get().markLevelUpdated();
 	}
 

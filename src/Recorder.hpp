@@ -51,6 +51,8 @@ private:
 	int m_fps = 60;
 	int m_frames = 0;
 	int m_stopAtFrame = -1;
+	int m_ticks = 0;        // диагностика: тиков планировщика за запись
+	int m_levelTicks = 0;   // диагностика: тиков, в которых уровень обновлялся
 
 	std::unique_ptr<ffmpeg::Recorder> m_recorder;
 	cocos2d::CCRenderTexture* m_texture = nullptr;
