@@ -84,6 +84,7 @@ bool Recorder::start() {
 	m_levelUpdated = false;
 	m_ticks = 0;
 	m_levelTicks = 0;
+	m_haveX = false;
 
 	// Offscreen-текстура нужного размера: в неё рисуем уровень для каждого кадра
 	m_texture = CCRenderTexture::create(m_width, m_height, kCCTexture2DPixelFormat_RGBA8888);
@@ -110,6 +111,11 @@ bool Recorder::start() {
 	// Каждый раз новый объект, чтобы не зависеть от повторного init
 	m_recorder = std::make_unique<ffmpeg::Recorder>();
 	m_recorder->init(settings);
+
+	// Игра может считать шаг по интервалу кадра экрана (например 1/120), а не по
+	// переданному dt. На время записи ставим интервал равным кадру видео.
+	m_oldInterval = director->getAnimationInterval();
+	director->setAnimationInterval(1.0 / static_cast<double>(m_fps));
 
 	m_recording = true;
 	log::info("Showcase Recorder: started {}x{} @ {} fps, audio={} -> {}",
@@ -177,6 +183,15 @@ void Recorder::captureFrame(PlayLayer* layer) {
 	m_recorder->writeFrame(m_pixels);
 	++m_frames;
 
+	// Запоминаем положение игрока по X для проверки скорости
+	if (layer->m_player1) {
+		m_lastX = layer->m_player1->getPositionX();
+		if (!m_haveX) {
+			m_firstX = m_lastX;
+			m_haveX = true;
+		}
+	}
+
 	if (m_stopAtFrame >= 0 && m_frames >= m_stopAtFrame) {
 		this->stop();
 	}
@@ -197,8 +212,21 @@ void Recorder::stop() {
 	m_pixels.clear();
 	m_pixels.shrink_to_fit();
 
+	if (m_oldInterval > 0.0) {
+		CCDirector::get()->setAnimationInterval(m_oldInterval);
+		m_oldInterval = 0.0;
+	}
+
 	log::info("Showcase Recorder: stopped, ticks={}, level ticks={}, frames={} -> {}",
 		m_ticks, m_levelTicks, m_frames, m_output.string());
+
+	// Скорость игрока в единицах за секунду видео: для уровня на обычной скорости
+	// должно быть около 311.6 (если в уровне нет порталов скорости)
+	if (m_haveX && m_frames > 1) {
+		double videoSeconds = static_cast<double>(m_frames) / static_cast<double>(m_fps);
+		log::info("Showcase Recorder: speed check {:.1f} units per video second over {:.2f}s",
+			(m_lastX - m_firstX) / videoSeconds, videoSeconds);
+	}
 
 	this->finishOutput();
 
