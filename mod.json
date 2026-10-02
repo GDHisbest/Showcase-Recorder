@@ -1,8 +1,9 @@
 {
 	"geode": "5.10.1",
 	"gd": {
-		"android": "2.2081"
-	},
+	"android": "2.2081",
+	"win": "2.2081"
+},
 	"id": "flim.showcase-recorder",
 	"name": "Showcase Recorder",
 	"version": "v1.0.0",
