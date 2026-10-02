@@ -22,6 +22,9 @@ RenderSettings RenderSettings::load() {
 	s.fadeIn = mod->getSavedValue<float>("fade-in", s.fadeIn);
 	s.fadeOut = mod->getSavedValue<float>("fade-out", s.fadeOut);
 
+	s.videoArgs = mod->getSavedValue<std::string>("video-args", s.videoArgs);
+	s.audioArgs = mod->getSavedValue<std::string>("audio-args", s.audioArgs);
+
 	s.sanitize();
 	return s;
 }
@@ -39,6 +42,9 @@ void RenderSettings::save() const {
 
 	mod->setSavedValue("fade-in", fadeIn);
 	mod->setSavedValue("fade-out", fadeOut);
+
+	mod->setSavedValue("video-args", videoArgs);
+	mod->setSavedValue("audio-args", audioArgs);
 }
 
 void RenderSettings::sanitize() {
@@ -48,6 +54,10 @@ void RenderSettings::sanitize() {
 
 	fadeIn = std::max(0.f, fadeIn);
 	fadeOut = std::max(0.f, fadeOut);
+
+	// Строки аргументов ограничиваем по длине
+	if (videoArgs.size() > 300) videoArgs.resize(300);
+	if (audioArgs.size() > 300) audioArgs.resize(300);
 
 	if (videoCodec.empty()) videoCodec = "libx264";
 	if (audioCodec.empty()) audioCodec = "aac";

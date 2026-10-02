@@ -17,6 +17,10 @@ struct RenderSettings {
 	std::string audioCodec = "aac";
 	int audioBitrateKbps = 192;
 
+	// Дополнительные аргументы кодирования (строкой, как для ffmpeg)
+	std::string videoArgs;
+	std::string audioArgs;
+
 	// Fade в секундах (0 = выключено)
 	float fadeIn = 0.f;
 	float fadeOut = 0.f;

@@ -15,6 +15,21 @@ Recorder& Recorder::get() {
 	return instance;
 }
 
+std::filesystem::path Recorder::findSongPath(GJGameLevel* level) {
+	if (!level) return {};
+
+	std::string path;
+	if (level->m_songID > 0) {
+		// Музыка с Newgrounds / из библиотеки: лежит в папке скачанных песен
+		path = MusicDownloadManager::sharedState()->pathForSong(level->m_songID);
+	} else {
+		// Официальный трек, файл в ресурсах игры
+		auto name = LevelTools::getAudioFileName(level->m_audioTrack);
+		path = CCFileUtils::sharedFileUtils()->fullPathForFilename(name.c_str(), false);
+	}
+	return path;
+}
+
 bool Recorder::start() {
 	if (m_recording) return false;
 
@@ -25,7 +40,30 @@ bool Recorder::start() {
 	auto dir = Mod::get()->getSaveDir() / "recordings";
 	std::error_code ec;
 	std::filesystem::create_directories(dir, ec);
-	m_output = dir / fmt::format("showcase_{}.mp4", static_cast<long long>(std::time(nullptr)));
+	auto stamp = static_cast<long long>(std::time(nullptr));
+	m_output = dir / fmt::format("showcase_{}.mp4", stamp);
+
+	// Звук: берём музыку уровня, если не включён No audio и файл найден
+	m_withAudio = false;
+	m_songPath.clear();
+	if (!s.noAudio) {
+		auto layer = PlayLayer::get();
+		m_songPath = findSongPath(layer ? layer->m_level : nullptr);
+
+		std::error_code existsEc;
+		if (!m_songPath.empty() && std::filesystem::exists(m_songPath, existsEc)) {
+			m_withAudio = true;
+		} else {
+			log::warn("Showcase Recorder: song file not found ('{}'), recording without audio",
+				m_songPath.string());
+			Notification::create("Song file not found, no audio", NotificationIcon::Warning)->show();
+		}
+	}
+
+	// Со звуком сначала пишем видео во временный файл, потом смешиваем с музыкой
+	m_videoFile = m_withAudio
+		? dir / fmt::format("showcase_{}_video.mp4", stamp)
+		: m_output;
 
 	// Разрешение видео подстраивается под телефон: высота как у экрана,
 	// ширина по пропорциям игровой картинки, оба значения чётные
@@ -67,15 +105,20 @@ bool Recorder::start() {
 	settings.m_width = m_width;
 	settings.m_height = m_height;
 	settings.m_fps = m_fps;
-	settings.m_outputFile = m_output.string();
+	settings.m_outputFile = m_videoFile.string();
 
 	// Каждый раз новый объект, чтобы не зависеть от повторного init
 	m_recorder = std::make_unique<ffmpeg::Recorder>();
 	m_recorder->init(settings);
 
 	m_recording = true;
-	log::info("Showcase Recorder: started {}x{} @ {} fps -> {}",
-		m_width, m_height, m_fps, m_output.string());
+	log::info("Showcase Recorder: started {}x{} @ {} fps, audio={} -> {}",
+		m_width, m_height, m_fps, m_withAudio, m_output.string());
+	if (!s.videoArgs.empty() || !s.audioArgs.empty()) {
+		// Пока только сохраняются: в API FFmpeg API по README нет полей для аргументов
+		log::info("Showcase Recorder: video args '{}', audio args '{}' (not applied yet)",
+			s.videoArgs, s.audioArgs);
+	}
 	return true;
 }
 
@@ -156,10 +199,34 @@ void Recorder::stop() {
 
 	log::info("Showcase Recorder: stopped, ticks={}, level ticks={}, frames={} -> {}",
 		m_ticks, m_levelTicks, m_frames, m_output.string());
+
+	this->finishOutput();
+
 	Notification::create(
 		fmt::format("Saved: {}", m_output.filename().string()),
 		NotificationIcon::Success
 	)->show();
+}
+
+void Recorder::finishOutput() {
+	if (!m_withAudio) return; // видео уже записано сразу в итоговый файл
+
+	std::error_code ec;
+
+	// Смешиваем видео с музыкой уровня. Вызов блокирующий, на длинных
+	// записях игра на пару секунд замирает.
+	ffmpeg::AudioMixer::mixVideoAudio(
+		m_videoFile.string(), m_songPath.string(), m_output.string()
+	);
+
+	if (std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
+		std::filesystem::remove(m_videoFile, ec);
+	} else {
+		// Микс не удался: оставляем хотя бы видео без звука
+		log::error("Showcase Recorder: audio mix failed, keeping video without audio");
+		std::filesystem::rename(m_videoFile, m_output, ec);
+		Notification::create("Audio mix failed, saved without audio", NotificationIcon::Warning)->show();
+	}
 }
 
 } // namespace sr

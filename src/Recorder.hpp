@@ -9,6 +9,7 @@
 
 // Заголовок из мода FFmpeg API (путь взят из его README, при ошибке сверить)
 #include <eclipse.ffmpeg-api/include/recorder.hpp>
+#include <eclipse.ffmpeg-api/include/audio_mixer.hpp>
 
 namespace sr {
 
@@ -44,6 +45,12 @@ public:
 private:
 	void captureFrame(PlayLayer* layer);
 
+	// Находит файл музыки уровня (пустой путь, если не нашли)
+	static std::filesystem::path findSongPath(GJGameLevel* level);
+
+	// Добавляет музыку к записанному видео (или просто переименовывает файл)
+	void finishOutput();
+
 	bool m_recording = false;
 	bool m_levelUpdated = false;
 	int m_width = 0;
@@ -57,7 +64,10 @@ private:
 	std::unique_ptr<ffmpeg::Recorder> m_recorder;
 	cocos2d::CCRenderTexture* m_texture = nullptr;
 	std::vector<uint8_t> m_pixels;
-	std::filesystem::path m_output;
+	std::filesystem::path m_output;     // итоговый файл
+	std::filesystem::path m_videoFile;  // видео без звука (если звук будет добавлен)
+	std::filesystem::path m_songPath;
+	bool m_withAudio = false;
 };
 
 } // namespace sr
