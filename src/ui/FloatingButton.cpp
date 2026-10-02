@@ -1,5 +1,6 @@
 #include "FloatingButton.hpp"
 #include "SettingsPopup.hpp"
+#include "../Recorder.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -40,11 +41,11 @@ bool FloatingButton::init() {
 	sprite->setPosition({size.width / 2, size.height / 2});
 	this->addChild(sprite);
 
-	auto label = CCLabelBMFont::create("REC", "bigFont.fnt");
-	label->setScale(0.4f);
-	label->setColor(kMagenta);
-	label->setPosition({size.width / 2, size.height / 2});
-	this->addChild(label);
+	m_label = CCLabelBMFont::create(Recorder::get().isRecording() ? "STOP" : "REC", "bigFont.fnt");
+	m_label->setScale(0.4f);
+	m_label->setColor(kMagenta);
+	m_label->setPosition({size.width / 2, size.height / 2});
+	this->addChild(m_label);
 
 	// Один касающийся палец, обработка через registerWithTouchDispatcher
 	this->setTouchMode(kCCTouchesOneByOne);
@@ -104,6 +105,13 @@ void FloatingButton::ccTouchEnded(CCTouch*, CCEvent*) {
 	if (m_dragging) {
 		m_dragging = false;
 		this->savePosition();
+		return;
+	}
+
+	// Во время записи тап по кнопке останавливает запись
+	if (Recorder::get().isRecording()) {
+		Recorder::get().stop();
+		if (m_label) m_label->setString("REC");
 		return;
 	}
 

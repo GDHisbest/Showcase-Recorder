@@ -1,5 +1,6 @@
 #include "SettingsPopup.hpp"
 #include "../RenderSettings.hpp"
+#include "../Recorder.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -53,14 +54,14 @@ SettingsPopup* SettingsPopup::create() {
 }
 
 bool SettingsPopup::init() {
-	if (!Popup::init(340.f, 280.f)) return false;
+	if (!Popup::init(340.f, 320.f)) return false;
 	s_open = true;
 
 	this->setTitle("Render Settings");
 
 	auto* s = &RenderSettings::current();
 
-	float y = 88.f;
+	float y = 108.f;
 	constexpr float dy = 24.f;
 
 	this->addStepperRow("Video FPS", y,
@@ -114,6 +115,19 @@ bool SettingsPopup::init() {
 	this->addStepperRow("Fade out", y,
 		[s] { return s->fadeOut <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeOut); },
 		[s](int d) { s->fadeOut = std::clamp(s->fadeOut + d * 0.5f, 0.f, 30.f); commit(); });
+
+	// Кнопка запуска записи: стартуем, закрываем окно, дальше жмём Resume
+	auto recSprite = ButtonSprite::create("Start recording");
+	recSprite->setScale(0.8f);
+	auto recBtn = CCMenuItemExt::createSpriteExtra(recSprite, [this](auto*) {
+		if (!Recorder::get().start()) {
+			Notification::create("Could not start recording", NotificationIcon::Error)->show();
+			return;
+		}
+		Notification::create("Recording started. Press Resume", NotificationIcon::Success)->show();
+		this->keyBackClicked();
+	});
+	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -125.f});
 
 	return true;
 }

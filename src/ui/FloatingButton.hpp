@@ -11,6 +11,7 @@ class FloatingButton : public cocos2d::CCLayer {
 protected:
 	cocos2d::CCPoint m_touchStart = {0.f, 0.f};
 	cocos2d::CCPoint m_nodeStart = {0.f, 0.f};
+	cocos2d::CCLabelBMFont* m_label = nullptr;
 	bool m_dragging = false;
 
 	bool init() override;
