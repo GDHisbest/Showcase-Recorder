@@ -7,9 +7,7 @@ namespace sr {
 // Все настройки рендера в одном месте.
 // UI (SettingsPopup) меняет эти поля, Recorder читает их при старте записи.
 struct RenderSettings {
-	// Видео
-	int width = 1920;
-	int height = 1080;
+	// Видео (разрешение берётся с экрана телефона, см. Recorder::start)
 	int fps = 60;                       // FPS видео, не зависит от TPS игры
 	int videoBitrateKbps = 8000;
 	std::string videoCodec = "libx264"; // позже заменим на список доступных кодеков

@@ -6,23 +6,28 @@
 
 using namespace geode::prelude;
 
-// Во время записи каждый шаг игры равен ровно одному кадру видео (1 / fps).
-// Поэтому FPS видео не зависит ни от FPS экрана, ни от TPS физики.
+// Во время записи каждый тик планировщика равен ровно 1 / fps секунд игрового
+// времени, а в конце тика пишется ровно один кадр. Поэтому скорость видео
+// нормальная и не зависит ни от FPS экрана, ни от TPS физики, ни от того,
+// насколько медленно телефон рисует кадры во время записи.
 class $modify(SRScheduler, CCScheduler) {
 	void update(float dt) {
 		auto& rec = sr::Recorder::get();
-		if (rec.isRecording()) dt = rec.stepDt();
-		CCScheduler::update(dt);
+		if (!rec.isRecording()) {
+			CCScheduler::update(dt);
+			return;
+		}
+
+		CCScheduler::update(rec.stepDt());
+		rec.endTick();
 	}
 };
 
 class $modify(SRPlayLayer, PlayLayer) {
-	// Вызывается после каждого шага игры (на паузе не вызывается)
-	void postUpdate(float dt) {
-		PlayLayer::postUpdate(dt);
-
-		auto& rec = sr::Recorder::get();
-		if (rec.isRecording()) rec.captureFrame(this);
+	// Вызывается один раз за тик, пока уровень не на паузе
+	void update(float dt) {
+		PlayLayer::update(dt);
+		sr::Recorder::get().markLevelUpdated();
 	}
 
 	// После прохождения пишем ещё 3 секунды видео, чтобы поймать эффекты

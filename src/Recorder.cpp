@@ -1,6 +1,7 @@
 #include "Recorder.hpp"
 #include "RenderSettings.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -26,11 +27,23 @@ bool Recorder::start() {
 	std::filesystem::create_directories(dir, ec);
 	m_output = dir / fmt::format("showcase_{}.mp4", static_cast<long long>(std::time(nullptr)));
 
-	m_width = s.width;
-	m_height = s.height;
+	// Разрешение видео подстраивается под телефон: высота как у экрана,
+	// ширина по пропорциям игровой картинки, оба значения чётные
+	auto director = CCDirector::get();
+	auto win = director->getWinSize();
+	auto frame = CCEGLView::get()->getFrameSize();
+	float shortSide = std::min(frame.width, frame.height);
+	if (shortSide < 144.f) shortSide = director->getWinSizeInPixels().height;
+
+	int h = std::clamp(static_cast<int>(shortSide), 144, 4320);
+	int w = std::clamp(static_cast<int>(std::lround(h * (win.width / win.height))), 144, 7680);
+	m_height = h - h % 2;
+	m_width = w - w % 2;
+
 	m_fps = s.fps;
 	m_frames = 0;
 	m_stopAtFrame = -1;
+	m_levelUpdated = false;
 
 	// Offscreen-текстура нужного размера: в неё рисуем уровень для каждого кадра
 	m_texture = CCRenderTexture::create(m_width, m_height, kCCTexture2DPixelFormat_RGBA8888);
@@ -42,7 +55,6 @@ bool Recorder::start() {
 
 	size_t bytes = static_cast<size_t>(m_width) * m_height * 4;
 	m_pixels.assign(bytes, 0);
-	m_flipped.assign(bytes, 0);
 
 	// Настройки FFmpeg API (имена полей взяты из README мода, сверить при ошибках сборки)
 	using namespace ffmpeg;
@@ -70,26 +82,47 @@ void Recorder::stopAfter(float seconds) {
 	m_stopAtFrame = m_frames + static_cast<int>(std::lround(seconds * m_fps));
 }
 
+void Recorder::endTick() {
+	if (!m_recording) return;
+
+	bool updated = m_levelUpdated;
+	m_levelUpdated = false;
+	if (!updated) return; // пауза или экран без уровня: кадр не пишем
+
+	if (auto layer = PlayLayer::get()) this->captureFrame(layer);
+}
+
 void Recorder::captureFrame(PlayLayer* layer) {
 	if (!m_recording || !m_texture || !m_recorder || !layer) return;
 
-	// Рисуем уровень в offscreen-текстуру и читаем пиксели
-	m_texture->begin();
+	// CCRenderTexture::begin() рисует сцену в масштабе экрана, поэтому при другом
+	// размере видео картинка занимает только часть кадра (в левом нижнем углу).
+	// Компенсируем масштабом: вписываем экран в кадр целиком, по краям чёрные полосы.
+	auto director = CCDirector::get();
+	auto win = director->getWinSize();           // в поинтах
+	auto winPx = director->getWinSizeInPixels(); // в пикселях экрана
+
+	float wr = winPx.width / static_cast<float>(m_width);
+	float hr = winPx.height / static_cast<float>(m_height);
+	float s = std::min(1.f / wr, 1.f / hr);
+	float marginX = (1.f - wr * s) * 0.5f;
+	float marginY = (1.f - hr * s) * 0.5f;
+	float tx = marginX * win.width / wr;
+	float ty = marginY * win.height / hr;
+
+	m_texture->beginWithClear(0.f, 0.f, 0.f, 1.f);
+	kmGLMatrixMode(KM_GL_MODELVIEW);
+	kmGLPushMatrix();
+	kmGLTranslatef(tx, ty, 0.f);
+	kmGLScalef(s, s, 1.f);
 	layer->visit();
+	kmGLPopMatrix();
 	glReadPixels(0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, m_pixels.data());
 	m_texture->end();
 
-	// OpenGL отдаёт строки снизу вверх, а видео ждёт сверху вниз
-	size_t row = static_cast<size_t>(m_width) * 4;
-	for (int y = 0; y < m_height; ++y) {
-		std::memcpy(
-			m_flipped.data() + static_cast<size_t>(y) * row,
-			m_pixels.data() + static_cast<size_t>(m_height - 1 - y) * row,
-			row
-		);
-	}
-
-	m_recorder->writeFrame(m_flipped);
+	// Переворот строк не делаем: по видео (картинка была вверх ногами)
+	// FFmpeg API сам переворачивает кадры, как это принято для OpenGL.
+	m_recorder->writeFrame(m_pixels);
 	++m_frames;
 
 	if (m_stopAtFrame >= 0 && m_frames >= m_stopAtFrame) {
@@ -111,8 +144,6 @@ void Recorder::stop() {
 	}
 	m_pixels.clear();
 	m_pixels.shrink_to_fit();
-	m_flipped.clear();
-	m_flipped.shrink_to_fit();
 
 	log::info("Showcase Recorder: stopped, {} frames -> {}", m_frames, m_output.string());
 	Notification::create(

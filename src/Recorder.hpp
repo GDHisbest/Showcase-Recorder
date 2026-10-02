@@ -14,11 +14,12 @@ namespace sr {
 
 // Управляет записью видео:
 //  start()        - создаёт FFmpeg Recorder и offscreen-текстуру нужного размера
-//  captureFrame() - вызывается один раз за каждый шаг игры, пишет один кадр
+//  markLevelUpdated() + endTick() - один кадр видео за один тик планировщика
 //  stop()         - закрывает файл
 //
-// Время кадра фиксировано (1 / fps), поэтому видео ровное, даже если
-// телефон рендерит медленнее реального времени.
+// Один тик планировщика = ровно 1 / fps секунд игрового времени (хук на
+// CCScheduler::update). Кадр пишется один раз за тик, независимо от TPS физики,
+// поэтому видео идёт в нормальной скорости, даже если телефон рендерит медленно.
 class Recorder {
 public:
 	static Recorder& get();
@@ -34,10 +35,17 @@ public:
 	// Остановить запись через N секунд видео (например, после прохождения уровня)
 	void stopAfter(float seconds);
 
-	void captureFrame(PlayLayer* layer);
+	// Уровень обновился в этом тике (вызывает хук PlayLayer::update)
+	void markLevelUpdated() { m_levelUpdated = true; }
+
+	// Конец тика планировщика: если уровень обновился, пишем один кадр
+	void endTick();
 
 private:
+	void captureFrame(PlayLayer* layer);
+
 	bool m_recording = false;
+	bool m_levelUpdated = false;
 	int m_width = 0;
 	int m_height = 0;
 	int m_fps = 60;
@@ -47,7 +55,6 @@ private:
 	std::unique_ptr<ffmpeg::Recorder> m_recorder;
 	cocos2d::CCRenderTexture* m_texture = nullptr;
 	std::vector<uint8_t> m_pixels;
-	std::vector<uint8_t> m_flipped;
 	std::filesystem::path m_output;
 };
 
