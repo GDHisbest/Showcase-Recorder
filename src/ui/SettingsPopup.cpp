@@ -12,6 +12,11 @@ using namespace geode::prelude;
 
 namespace {
 
+// Неоновая палитра окна
+const ccColor3B kCyan = {0, 255, 240};
+const ccColor3B kMagenta = {255, 70, 200};
+const ccColor3B kLabel = {180, 190, 255};
+
 // Наборы значений для переключения стрелками
 const std::vector<int> kFps{30, 60, 90, 120, 144, 240};
 const std::vector<int> kAudioBitrates{96, 128, 192, 256, 320};
@@ -53,70 +58,72 @@ SettingsPopup* SettingsPopup::create() {
 }
 
 bool SettingsPopup::init() {
-	if (!Popup::init(340.f, 360.f)) return false;
+	// Высота экрана GD всего 320 единиц, поэтому окно компактное: две колонки
+	if (!Popup::init(400.f, 270.f)) return false;
 	s_open = true;
 
-	this->setTitle("Render Settings");
+	this->setTitle("Showcase Recorder");
+	if (m_bgSprite) m_bgSprite->setColor({16, 12, 40}); // тёмно-синий фон
 
 	auto* s = &RenderSettings::current();
 
-	float y = 124.f;
-	constexpr float dy = 24.f;
+	constexpr float L = -100.f; // центр левой колонки (видео)
+	constexpr float R = 100.f;  // центр правой колонки (аудио)
 
-	this->addStepperRow("Video FPS", y,
+	// Тонкая неоновая линия между колонками
+	auto divider = CCLayerColor::create(ccc4(0, 255, 240, 70), 1.f, 165.f);
+	divider->ignoreAnchorPointForPosition(false);
+	m_mainLayer->addChildAtPosition(divider, Anchor::Center, {0.f, -4.f});
+
+	this->addHeader("VIDEO", L, 100.f, kCyan);
+	this->addHeader("AUDIO", R, 100.f, kMagenta);
+
+	// Левая колонка: видео
+	this->addStepperRow("FPS", L, 76.f,
 		[s] { return fmt::format("{}", s->fps); },
 		[s](int d) { cycle(s->fps, kFps, d); commit(); });
-	y -= dy;
 
-	this->addStepperRow("Video bitrate", y,
+	this->addStepperRow("Bitrate", L, 45.f,
 		[s] { return fmt::format("{} Mbps", s->videoBitrateKbps / 1000); },
 		[s](int d) {
 			s->videoBitrateKbps = std::max(1000, s->videoBitrateKbps + d * 1000);
 			commit();
 		});
-	y -= dy;
 
-	this->addStepperRow("Video codec", y,
+	this->addStepperRow("Codec", L, 14.f,
 		[s] { return s->videoCodec; },
 		[s](int d) { cycle(s->videoCodec, kVideoCodecs, d); commit(); });
-	y -= dy;
 
-	this->addStepperRow("Audio codec", y,
-		[s] { return s->audioCodec; },
-		[s](int d) { cycle(s->audioCodec, kAudioCodecs, d); commit(); });
-	y -= dy;
+	this->addTextRow("Extra args", L, -17.f, s->videoArgs,
+		[s](std::string const& text) { s->videoArgs = text; commit(); });
 
-	this->addStepperRow("Audio bitrate", y,
-		[s] { return fmt::format("{} kbps", s->audioBitrateKbps); },
-		[s](int d) { cycle(s->audioBitrateKbps, kAudioBitrates, d); commit(); });
-	y -= dy;
-
-	this->addToggleRow("No audio", y, s->noAudio,
-		[s](bool on) { s->noAudio = on; commit(); });
-	y -= dy;
-
-	this->addStepperRow("Fade in", y,
+	this->addStepperRow("Fade in", L, -54.f,
 		[s] { return s->fadeIn <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeIn); },
 		[s](int d) { s->fadeIn = std::clamp(s->fadeIn + d * 0.5f, 0.f, 30.f); commit(); });
-	y -= dy;
 
-	this->addStepperRow("Fade out", y,
+	// Правая колонка: аудио
+	this->addToggleRow("No audio", R, 76.f, s->noAudio,
+		[s](bool on) { s->noAudio = on; commit(); });
+
+	this->addStepperRow("Codec", R, 45.f,
+		[s] { return s->audioCodec; },
+		[s](int d) { cycle(s->audioCodec, kAudioCodecs, d); commit(); });
+
+	this->addStepperRow("Bitrate", R, 14.f,
+		[s] { return fmt::format("{} kbps", s->audioBitrateKbps); },
+		[s](int d) { cycle(s->audioBitrateKbps, kAudioBitrates, d); commit(); });
+
+	this->addTextRow("Extra args", R, -17.f, s->audioArgs,
+		[s](std::string const& text) { s->audioArgs = text; commit(); });
+
+	this->addStepperRow("Fade out", R, -54.f,
 		[s] { return s->fadeOut <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeOut); },
 		[s](int d) { s->fadeOut = std::clamp(s->fadeOut + d * 0.5f, 0.f, 30.f); commit(); });
-
-	// Строки с дополнительными аргументами для видео и аудио
-	y -= 36.f;
-	this->addTextRow("Video args", y, s->videoArgs,
-		[s](std::string const& text) { s->videoArgs = text; commit(); });
-	y -= 32.f;
-
-	this->addTextRow("Audio args", y, s->audioArgs,
-		[s](std::string const& text) { s->audioArgs = text; commit(); });
 
 	// Кнопка запуска записи: стартуем, закрываем окно и перезапускаем уровень,
 	// потому что звук берётся с начала трека
 	auto recSprite = ButtonSprite::create("Start recording");
-	recSprite->setScale(0.8f);
+	recSprite->setScale(0.75f);
 	auto recBtn = CCMenuItemExt::createSpriteExtra(recSprite, [this](auto*) {
 		if (!Recorder::get().start()) {
 			Notification::create("Could not start recording", NotificationIcon::Error)->show();
@@ -130,32 +137,38 @@ bool SettingsPopup::init() {
 			pause->onRestart(nullptr);
 		}
 	});
-	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -146.f});
+	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -104.f});
 
 	return true;
 }
 
+void SettingsPopup::addHeader(char const* text, float cx, float y, ccColor3B color) {
+	auto label = CCLabelBMFont::create(text, "goldFont.fnt");
+	label->setScale(0.55f);
+	label->setColor(color);
+	m_mainLayer->addChildAtPosition(label, Anchor::Center, {cx, y});
+}
+
 void SettingsPopup::addStepperRow(
-	char const* title, float y,
+	char const* title, float cx, float y,
 	std::function<std::string()> getText,
 	std::function<void(int)> step
 ) {
-	float half = m_size.width / 2.f;
-
+	// Подпись над значением
 	auto name = CCLabelBMFont::create(title, "bigFont.fnt");
-	name->setScale(0.4f);
-	name->setAnchorPoint({0.f, 0.5f});
-	m_mainLayer->addChildAtPosition(name, Anchor::Center, {-half + 16.f, y});
+	name->setScale(0.3f);
+	name->setColor(kLabel);
+	m_mainLayer->addChildAtPosition(name, Anchor::Center, {cx, y + 11.f});
 
-	// Значение в центре правой группы, цвет неоновый циан
+	// Значение между стрелками
 	auto value = CCLabelBMFont::create(getText().c_str(), "bigFont.fnt");
-	value->setScale(0.4f);
-	value->setColor(ccc3(0, 255, 240));
-	m_mainLayer->addChildAtPosition(value, Anchor::Center, {66.f, y});
+	value->setColor(kCyan);
+	value->limitLabelWidth(88.f, 0.4f, 0.2f);
+	m_mainLayer->addChildAtPosition(value, Anchor::Center, {cx, y - 6.f});
 
 	auto makeArrow = [](bool pointRight) {
 		auto spr = CCSprite::createWithSpriteFrameName("GJ_arrow_03_001.png");
-		spr->setScale(0.45f);
+		spr->setScale(0.4f);
 		spr->setFlipX(pointRight);
 		return spr;
 	};
@@ -163,50 +176,48 @@ void SettingsPopup::addStepperRow(
 	auto left = CCMenuItemExt::createSpriteExtra(makeArrow(false), [=](auto*) {
 		step(-1);
 		value->setString(getText().c_str());
+		value->limitLabelWidth(88.f, 0.4f, 0.2f);
 	});
 	auto right = CCMenuItemExt::createSpriteExtra(makeArrow(true), [=](auto*) {
 		step(1);
 		value->setString(getText().c_str());
+		value->limitLabelWidth(88.f, 0.4f, 0.2f);
 	});
 
-	m_buttonMenu->addChildAtPosition(left, Anchor::Center, {8.f, y});
-	m_buttonMenu->addChildAtPosition(right, Anchor::Center, {124.f, y});
+	m_buttonMenu->addChildAtPosition(left, Anchor::Center, {cx - 62.f, y - 6.f});
+	m_buttonMenu->addChildAtPosition(right, Anchor::Center, {cx + 62.f, y - 6.f});
 }
 
 void SettingsPopup::addTextRow(
-	char const* title, float y, std::string const& initial,
+	char const* title, float cx, float y, std::string const& initial,
 	std::function<void(std::string const&)> onChange
 ) {
-	float half = m_size.width / 2.f;
-
 	auto name = CCLabelBMFont::create(title, "bigFont.fnt");
-	name->setScale(0.4f);
-	name->setAnchorPoint({0.f, 0.5f});
-	m_mainLayer->addChildAtPosition(name, Anchor::Center, {-half + 16.f, y});
+	name->setScale(0.3f);
+	name->setColor(kLabel);
+	m_mainLayer->addChildAtPosition(name, Anchor::Center, {cx, y + 11.f});
 
-	auto input = TextInput::create(150.f, "extra args", "chatFont.fnt");
+	auto input = TextInput::create(150.f, "optional", "chatFont.fnt");
 	input->setMaxCharCount(300);
 	input->setString(initial, false);
 	input->setCallback([onChange](std::string const& text) { onChange(text); });
-	m_mainLayer->addChildAtPosition(input, Anchor::Center, {66.f, y});
+	m_mainLayer->addChildAtPosition(input, Anchor::Center, {cx, y - 8.f});
 }
 
 void SettingsPopup::addToggleRow(
-	char const* title, float y, bool initial, std::function<void(bool)> onChange
+	char const* title, float cx, float y, bool initial, std::function<void(bool)> onChange
 ) {
-	float half = m_size.width / 2.f;
-
 	auto name = CCLabelBMFont::create(title, "bigFont.fnt");
-	name->setScale(0.4f);
-	name->setAnchorPoint({0.f, 0.5f});
-	m_mainLayer->addChildAtPosition(name, Anchor::Center, {-half + 16.f, y});
+	name->setScale(0.3f);
+	name->setColor(kLabel);
+	m_mainLayer->addChildAtPosition(name, Anchor::Center, {cx, y + 11.f});
 
 	auto toggler = CCMenuItemExt::createTogglerWithStandardSprites(0.5f, [onChange](CCMenuItemToggler* t) {
 		// Колбэк вызывается до переключения, поэтому новое состояние = !isToggled()
 		onChange(!t->isToggled());
 	});
 	toggler->toggle(initial);
-	m_buttonMenu->addChildAtPosition(toggler, Anchor::Center, {66.f, y});
+	m_buttonMenu->addChildAtPosition(toggler, Anchor::Center, {cx, y - 6.f});
 }
 
 } // namespace sr

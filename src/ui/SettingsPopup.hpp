@@ -6,7 +6,8 @@
 
 namespace sr {
 
-// Окно с настройками рендера. Открывается по тапу на FloatingButton.
+// Окно с настройками рендера (две колонки: видео и аудио, помещается на экран).
+// Открывается по тапу на FloatingButton.
 // Все изменения сразу пишутся в RenderSettings и сохраняются.
 class SettingsPopup : public geode::Popup {
 protected:
@@ -14,21 +15,27 @@ protected:
 
 	bool init();
 
-	// Строка: название слева, [<] значение [>] справа
+	// Заголовок колонки (cx, y - смещение от центра окна)
+	void addHeader(char const* text, float cx, float y, cocos2d::ccColor3B color);
+
+	// Подпись сверху, под ней [<] значение [>]
 	void addStepperRow(
-		char const* title, float y,
+		char const* title, float cx, float y,
 		std::function<std::string()> getText,
 		std::function<void(int)> step
 	);
 
-	// Строка: название слева, поле ввода текста справа
+	// Подпись сверху, под ней поле ввода текста
 	void addTextRow(
-		char const* title, float y, std::string const& initial,
+		char const* title, float cx, float y, std::string const& initial,
 		std::function<void(std::string const&)> onChange
 	);
 
-	// Строка: название слева, переключатель справа
-	void addToggleRow(char const* title, float y, bool initial, std::function<void(bool)> onChange);
+	// Подпись сверху, под ней переключатель
+	void addToggleRow(
+		char const* title, float cx, float y, bool initial,
+		std::function<void(bool)> onChange
+	);
 
 public:
 	~SettingsPopup() override { s_open = false; }
