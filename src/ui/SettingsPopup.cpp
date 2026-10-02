@@ -12,9 +12,6 @@ namespace {
 
 // Наборы значений для переключения стрелками
 const std::vector<int> kFps{30, 60, 90, 120, 144, 240};
-const std::vector<std::pair<int, int>> kResolutions{
-	{1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}
-};
 const std::vector<int> kAudioBitrates{96, 128, 192, 256, 320};
 
 // Пока заглушки: позже заменим реальным списком кодеков из FFmpeg API
@@ -54,30 +51,19 @@ SettingsPopup* SettingsPopup::create() {
 }
 
 bool SettingsPopup::init() {
-	if (!Popup::init(340.f, 320.f)) return false;
+	if (!Popup::init(340.f, 296.f)) return false;
 	s_open = true;
 
 	this->setTitle("Render Settings");
 
 	auto* s = &RenderSettings::current();
 
-	float y = 108.f;
+	float y = 96.f;
 	constexpr float dy = 24.f;
 
 	this->addStepperRow("Video FPS", y,
 		[s] { return fmt::format("{}", s->fps); },
 		[s](int d) { cycle(s->fps, kFps, d); commit(); });
-	y -= dy;
-
-	this->addStepperRow("Resolution", y,
-		[s] { return fmt::format("{}x{}", s->width, s->height); },
-		[s](int d) {
-			std::pair<int, int> cur{s->width, s->height};
-			cycle(cur, kResolutions, d);
-			s->width = cur.first;
-			s->height = cur.second;
-			commit();
-		});
 	y -= dy;
 
 	this->addStepperRow("Video bitrate", y,
@@ -127,7 +113,7 @@ bool SettingsPopup::init() {
 		Notification::create("Recording started. Press Resume", NotificationIcon::Success)->show();
 		this->keyBackClicked();
 	});
-	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -125.f});
+	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -113.f});
 
 	return true;
 }
