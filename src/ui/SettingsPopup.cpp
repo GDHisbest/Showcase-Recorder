@@ -5,6 +5,7 @@
 #include <Geode/ui/TextInput.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -21,9 +22,25 @@ const ccColor3B kLabel = {180, 190, 255};
 const std::vector<int> kFps{30, 60, 90, 120, 144, 240};
 const std::vector<int> kAudioBitrates{96, 128, 192, 256, 320};
 
-// Пока заглушки: позже заменим реальным списком кодеков из FFmpeg API
+#ifdef GEODE_IS_DESKTOP
+// ПК: программные и аппаратные кодеки (NVIDIA, AMD, Intel). Какие из них реально
+// доступны, зависит от видеокарты и сборки FFmpeg в FFmpeg API.
+const std::vector<std::string> kVideoCodecs{
+	"libx264", "h264_nvenc", "hevc_nvenc", "av1_nvenc",
+	"h264_amf", "hevc_amf", "h264_qsv", "hevc_qsv",
+	"libx265", "libvpx-vp9", "libsvtav1", "mpeg4"
+};
+const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame", "libopus"};
+#else
+// Android: программные кодеки и аппаратные через MediaCodec
 const std::vector<std::string> kVideoCodecs{"libx264", "h264_mediacodec", "libx265", "mpeg4"};
 const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame", "libopus"};
+#endif
+
+// Разрешения для ПК: название кнопки и высота кадра (ширина 16:9)
+const std::vector<std::pair<char const*, int>> kResolutions{
+	{"720p", 720}, {"1080p", 1080}, {"1440p", 1440}, {"4K", 2160}, {"8K", 4320}
+};
 
 // Переключает значение по кругу на dir (-1 или +1)
 template <class T>
@@ -58,8 +75,18 @@ SettingsPopup* SettingsPopup::create() {
 }
 
 bool SettingsPopup::init() {
-	// Высота экрана GD всего 320 единиц, поэтому окно компактное: две колонки
-	if (!Popup::init(400.f, 270.f)) return false;
+	// Высота экрана GD всего 320 единиц, поэтому окно компактное: две колонки.
+	// На ПК сверху добавляется ряд кнопок разрешения, окно выше на 31.
+#ifdef GEODE_IS_DESKTOP
+	constexpr float extra = 31.f;
+#else
+	constexpr float extra = 0.f;
+#endif
+	constexpr float H = 270.f + extra;
+	// Y по расстоянию от верхнего края окна (d): удобно, когда высота зависит от платформы
+	auto Y = [](float d) { return H / 2.f - d; };
+
+	if (!Popup::init(400.f, H)) return false;
 	s_open = true;
 
 	this->setTitle("Showcase Recorder");
@@ -73,50 +100,57 @@ bool SettingsPopup::init() {
 	// Тонкая неоновая линия между колонками
 	auto divider = CCLayerColor::create(ccc4(0, 255, 240, 70), 1.f, 165.f);
 	divider->ignoreAnchorPointForPosition(false);
-	m_mainLayer->addChildAtPosition(divider, Anchor::Center, {0.f, -4.f});
+	m_mainLayer->addChildAtPosition(divider, Anchor::Center, {0.f, Y(139.f + extra)});
 
-	this->addHeader("VIDEO", L, 100.f, kCyan);
-	this->addHeader("AUDIO", R, 100.f, kMagenta);
+#ifdef GEODE_IS_DESKTOP
+	this->addResolutionRow(Y(42.f));
+#endif
+
+	this->addHeader("VIDEO", L, Y(35.f + extra), kCyan);
+	this->addHeader("AUDIO", R, Y(35.f + extra), kMagenta);
 
 	// Левая колонка: видео
-	this->addStepperRow("FPS", L, 76.f,
+	this->addStepperRow("FPS", L, Y(59.f + extra),
 		[s] { return fmt::format("{}", s->fps); },
 		[s](int d) { cycle(s->fps, kFps, d); commit(); });
 
-	this->addStepperRow("Bitrate", L, 45.f,
+	this->addStepperRow("Bitrate", L, Y(90.f + extra),
 		[s] { return fmt::format("{} Mbps", s->videoBitrateKbps / 1000); },
 		[s](int d) {
-			s->videoBitrateKbps = std::max(1000, s->videoBitrateKbps + d * 1000);
+			// Шаг крупнее на больших значениях (для 4K и 8K)
+			int step = s->videoBitrateKbps < 20000 ? 1000 : 5000;
+			if (d < 0 && s->videoBitrateKbps <= 20000) step = 1000;
+			s->videoBitrateKbps = std::max(1000, s->videoBitrateKbps + d * step);
 			commit();
 		});
 
-	this->addStepperRow("Codec", L, 14.f,
+	this->addStepperRow("Codec", L, Y(121.f + extra),
 		[s] { return s->videoCodec; },
 		[s](int d) { cycle(s->videoCodec, kVideoCodecs, d); commit(); });
 
-	this->addTextRow("Extra args", L, -17.f, s->videoArgs,
+	this->addTextRow("Extra args", L, Y(152.f + extra), s->videoArgs,
 		[s](std::string const& text) { s->videoArgs = text; commit(); });
 
-	this->addStepperRow("Fade in", L, -54.f,
+	this->addStepperRow("Fade in", L, Y(189.f + extra),
 		[s] { return s->fadeIn <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeIn); },
 		[s](int d) { s->fadeIn = std::clamp(s->fadeIn + d * 0.5f, 0.f, 30.f); commit(); });
 
 	// Правая колонка: аудио
-	this->addToggleRow("No audio", R, 76.f, s->noAudio,
+	this->addToggleRow("No audio", R, Y(59.f + extra), s->noAudio,
 		[s](bool on) { s->noAudio = on; commit(); });
 
-	this->addStepperRow("Codec", R, 45.f,
+	this->addStepperRow("Codec", R, Y(90.f + extra),
 		[s] { return s->audioCodec; },
 		[s](int d) { cycle(s->audioCodec, kAudioCodecs, d); commit(); });
 
-	this->addStepperRow("Bitrate", R, 14.f,
+	this->addStepperRow("Bitrate", R, Y(121.f + extra),
 		[s] { return fmt::format("{} kbps", s->audioBitrateKbps); },
 		[s](int d) { cycle(s->audioBitrateKbps, kAudioBitrates, d); commit(); });
 
-	this->addTextRow("Extra args", R, -17.f, s->audioArgs,
+	this->addTextRow("Extra args", R, Y(152.f + extra), s->audioArgs,
 		[s](std::string const& text) { s->audioArgs = text; commit(); });
 
-	this->addStepperRow("Fade out", R, -54.f,
+	this->addStepperRow("Fade out", R, Y(189.f + extra),
 		[s] { return s->fadeOut <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeOut); },
 		[s](int d) { s->fadeOut = std::clamp(s->fadeOut + d * 0.5f, 0.f, 30.f); commit(); });
 
@@ -137,9 +171,33 @@ bool SettingsPopup::init() {
 			pause->onRestart(nullptr);
 		}
 	});
-	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, -104.f});
+	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, Y(239.f + extra)});
 
 	return true;
+}
+
+void SettingsPopup::addResolutionRow(float y) {
+	auto s = &RenderSettings::current();
+	auto sprites = std::make_shared<std::vector<ButtonSprite*>>();
+
+	for (size_t i = 0; i < kResolutions.size(); ++i) {
+		bool selected = s->videoHeight == kResolutions[i].second;
+		auto spr = ButtonSprite::create(
+			kResolutions[i].first, 0, false, "goldFont.fnt",
+			selected ? "GJ_button_01.png" : "GJ_button_04.png", 0.f, 0.5f
+		);
+		sprites->push_back(spr);
+
+		auto btn = CCMenuItemExt::createSpriteExtra(spr, [=](auto*) {
+			s->videoHeight = kResolutions[i].second;
+			commit();
+			// Подсвечиваем выбранную кнопку, остальные серые
+			for (size_t j = 0; j < sprites->size(); ++j) {
+				(*sprites)[j]->updateBGImage(j == i ? "GJ_button_01.png" : "GJ_button_04.png");
+			}
+		});
+		m_buttonMenu->addChildAtPosition(btn, Anchor::Center, {-150.f + 75.f * static_cast<float>(i), y});
+	}
 }
 
 void SettingsPopup::addHeader(char const* text, float cx, float y, ccColor3B color) {

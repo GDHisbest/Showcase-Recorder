@@ -18,6 +18,9 @@ protected:
 	// Заголовок колонки (cx, y - смещение от центра окна)
 	void addHeader(char const* text, float cx, float y, cocos2d::ccColor3B color);
 
+	// Ряд кнопок выбора разрешения 720p ... 8K (используется на ПК)
+	void addResolutionRow(float y);
+
 	// Подпись сверху, под ней [<] значение [>]
 	void addStepperRow(
 		char const* title, float cx, float y,
