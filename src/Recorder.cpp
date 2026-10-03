@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 
 using namespace geode::prelude;
 
@@ -84,7 +86,7 @@ bool Recorder::start() {
 	m_levelUpdated = false;
 	m_ticks = 0;
 	m_levelTicks = 0;
-	m_haveX = false;
+	m_havePercent = false;
 
 	// Offscreen-текстура нужного размера: в неё рисуем уровень для каждого кадра
 	m_texture = CCRenderTexture::create(m_width, m_height, kCCTexture2DPixelFormat_RGBA8888);
@@ -111,11 +113,6 @@ bool Recorder::start() {
 	// Каждый раз новый объект, чтобы не зависеть от повторного init
 	m_recorder = std::make_unique<ffmpeg::Recorder>();
 	m_recorder->init(settings);
-
-	// Игра может считать шаг по интервалу кадра экрана (например 1/120), а не по
-	// переданному dt. На время записи ставим интервал равным кадру видео.
-	m_oldInterval = director->getAnimationInterval();
-	director->setAnimationInterval(1.0 / static_cast<double>(m_fps));
 
 	m_recording = true;
 	log::info("Showcase Recorder: started {}x{} @ {} fps, audio={} -> {}",
@@ -183,13 +180,11 @@ void Recorder::captureFrame(PlayLayer* layer) {
 	m_recorder->writeFrame(m_pixels);
 	++m_frames;
 
-	// Запоминаем положение игрока по X для проверки скорости
-	if (layer->m_player1) {
-		m_lastX = layer->m_player1->getPositionX();
-		if (!m_haveX) {
-			m_firstX = m_lastX;
-			m_haveX = true;
-		}
+	// Запоминаем процент прохождения для проверки скорости
+	m_lastPercent = layer->getCurrentPercent();
+	if (!m_havePercent) {
+		m_startPercent = m_lastPercent;
+		m_havePercent = true;
 	}
 
 	if (m_stopAtFrame >= 0 && m_frames >= m_stopAtFrame) {
@@ -212,20 +207,22 @@ void Recorder::stop() {
 	m_pixels.clear();
 	m_pixels.shrink_to_fit();
 
-	if (m_oldInterval > 0.0) {
-		CCDirector::get()->setAnimationInterval(m_oldInterval);
-		m_oldInterval = 0.0;
-	}
-
 	log::info("Showcase Recorder: stopped, ticks={}, level ticks={}, frames={} -> {}",
 		m_ticks, m_levelTicks, m_frames, m_output.string());
 
-	// Скорость игрока в единицах за секунду видео: для уровня на обычной скорости
-	// должно быть около 311.6 (если в уровне нет порталов скорости)
-	if (m_haveX && m_frames > 1) {
-		double videoSeconds = static_cast<double>(m_frames) / static_cast<double>(m_fps);
-		log::info("Showcase Recorder: speed check {:.1f} units per video second over {:.2f}s",
-			(m_lastX - m_firstX) / videoSeconds, videoSeconds);
+	// Проверка скорости: за сколько секунд ВИДЕО набралось бы 100% уровня.
+	// Если это число сильно больше настоящей длины уровня, игра в видео идёт медленнее.
+	double videoSeconds = static_cast<double>(m_frames) / static_cast<double>(m_fps);
+	double progress = static_cast<double>(m_lastPercent - m_startPercent);
+	if (m_havePercent && progress > 0.5 && videoSeconds > 0.0) {
+		double fullLength = videoSeconds * 100.0 / progress;
+		log::info("Showcase Recorder: speed check, {:.2f}% in {:.2f}s of video -> full level {:.0f}s",
+			progress, videoSeconds, fullLength);
+		Notification::create(
+			fmt::format("Level length in video: {}:{:02}", static_cast<int>(fullLength) / 60,
+				static_cast<int>(fullLength) % 60),
+			NotificationIcon::Info, 6.f
+		)->show();
 	}
 
 	this->finishOutput();
@@ -236,18 +233,151 @@ void Recorder::stop() {
 	)->show();
 }
 
+bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double seconds) {
+	auto engine = FMODAudioEngine::sharedEngine();
+	if (!engine || !engine->m_system) return false;
+
+	// Открываем файл музыки только для чтения PCM (без воспроизведения)
+	FMOD::Sound* sound = nullptr;
+	auto result = engine->m_system->createSound(
+		m_songPath.string().c_str(),
+		FMOD_DEFAULT | FMOD_CREATESTREAM | FMOD_OPENONLY,
+		nullptr, &sound
+	);
+	if (result != FMOD_OK || !sound) {
+		log::error("Showcase Recorder: cannot open song for decoding ({})", static_cast<int>(result));
+		return false;
+	}
+
+	FMOD_SOUND_FORMAT format = FMOD_SOUND_FORMAT_NONE;
+	int channels = 0;
+	int bits = 0;
+	float freq = 0.f;
+	sound->getFormat(nullptr, &format, &channels, &bits);
+	sound->getDefaults(&freq, nullptr);
+
+	int bytesPerSample = 0;
+	if (format == FMOD_SOUND_FORMAT_PCM16) bytesPerSample = 2;
+	else if (format == FMOD_SOUND_FORMAT_PCMFLOAT) bytesPerSample = 4;
+
+	if (bytesPerSample == 0 || channels < 1 || channels > 2 || freq < 8000.f) {
+		log::error("Showcase Recorder: unsupported song format {} ch {} freq {}",
+			static_cast<int>(format), channels, freq);
+		sound->release();
+		return false;
+	}
+
+	int sampleRate = static_cast<int>(std::lround(freq));
+	size_t totalFrames = static_cast<size_t>(std::llround(seconds * sampleRate));
+	std::vector<float> pcm(totalFrames * 2, 0.f); // стерео, остаток после конца песни = тишина
+
+	// Читаем кусками строго с начала песни и сразу переводим в float-стерео
+	constexpr unsigned int kChunkFrames = 4096;
+	std::vector<uint8_t> chunk(static_cast<size_t>(kChunkFrames) * channels * bytesPerSample);
+	size_t written = 0;
+	while (written < totalFrames) {
+		unsigned int want = static_cast<unsigned int>(
+			std::min<size_t>(kChunkFrames, totalFrames - written) * channels * bytesPerSample
+		);
+		unsigned int got = 0;
+		auto r = sound->readData(chunk.data(), want, &got);
+		unsigned int gotFrames = got / (channels * bytesPerSample);
+		for (unsigned int i = 0; i < gotFrames; ++i) {
+			float samples[2] = {0.f, 0.f};
+			for (int c = 0; c < channels; ++c) {
+				size_t offset = (static_cast<size_t>(i) * channels + c) * bytesPerSample;
+				if (bytesPerSample == 2) {
+					int16_t v;
+					std::memcpy(&v, chunk.data() + offset, 2);
+					samples[c] = static_cast<float>(v) / 32768.f;
+				} else {
+					std::memcpy(&samples[c], chunk.data() + offset, 4);
+				}
+			}
+			if (channels == 1) samples[1] = samples[0];
+			pcm[(written + i) * 2] = samples[0];
+			pcm[(written + i) * 2 + 1] = samples[1];
+		}
+		written += gotFrames;
+		if (r != FMOD_OK || gotFrames == 0) break; // конец файла или ошибка
+	}
+	sound->release();
+
+	// Fade in / fade out звука (в секундах)
+	auto& s = RenderSettings::current();
+	size_t fadeInFrames = static_cast<size_t>(std::max(0.f, s.fadeIn) * sampleRate);
+	size_t fadeOutFrames = static_cast<size_t>(std::max(0.f, s.fadeOut) * sampleRate);
+	for (size_t i = 0; i < totalFrames; ++i) {
+		float gain = 1.f;
+		if (fadeInFrames > 0 && i < fadeInFrames) {
+			gain = std::min(gain, static_cast<float>(i) / static_cast<float>(fadeInFrames));
+		}
+		if (fadeOutFrames > 0 && totalFrames - 1 - i < fadeOutFrames) {
+			gain = std::min(gain, static_cast<float>(totalFrames - 1 - i) / static_cast<float>(fadeOutFrames));
+		}
+		if (gain < 1.f) {
+			pcm[i * 2] *= gain;
+			pcm[i * 2 + 1] *= gain;
+		}
+	}
+
+	// Пишем WAV: 16 бит, стерео
+	std::ofstream out(wavPath, std::ios::binary);
+	if (!out) return false;
+
+	auto put32 = [&](uint32_t v) { out.write(reinterpret_cast<char const*>(&v), 4); };
+	auto put16 = [&](uint16_t v) { out.write(reinterpret_cast<char const*>(&v), 2); };
+
+	uint32_t dataBytes = static_cast<uint32_t>(totalFrames * 2 * 2);
+	out.write("RIFF", 4);
+	put32(36 + dataBytes);
+	out.write("WAVEfmt ", 8);
+	put32(16);
+	put16(1);                                   // PCM
+	put16(2);                                   // каналов
+	put32(static_cast<uint32_t>(sampleRate));
+	put32(static_cast<uint32_t>(sampleRate) * 4);
+	put16(4);                                   // байт на кадр
+	put16(16);                                  // бит на сэмпл
+	out.write("data", 4);
+	put32(dataBytes);
+
+	std::vector<int16_t> block(2048);
+	for (size_t i = 0; i < pcm.size(); i += block.size()) {
+		size_t n = std::min(block.size(), pcm.size() - i);
+		for (size_t j = 0; j < n; ++j) {
+			float v = std::clamp(pcm[i + j], -1.f, 1.f);
+			block[j] = static_cast<int16_t>(std::lround(v * 32767.f));
+		}
+		out.write(reinterpret_cast<char const*>(block.data()), static_cast<std::streamsize>(n * 2));
+	}
+
+	log::info("Showcase Recorder: audio wav {:.2f}s, {} Hz, song frames read {}/{}",
+		seconds, sampleRate, written, totalFrames);
+	return out.good();
+}
+
 void Recorder::finishOutput() {
 	if (!m_withAudio) return; // видео уже записано сразу в итоговый файл
 
 	std::error_code ec;
 
-	// Смешиваем видео с музыкой уровня. Вызов блокирующий, на длинных
-	// записях игра на пару секунд замирает.
-	ffmpeg::AudioMixer::mixVideoAudio(
-		m_videoFile.string(), m_songPath.string(), m_output.string()
-	);
+	// Миксер сжимает звук под длину видео, поэтому даём ему WAV ровно такой же длины:
+	// длина = число записанных кадров / fps, музыка с самого начала, без ускорения.
+	double videoSeconds = static_cast<double>(m_frames) / static_cast<double>(m_fps);
+	auto wavPath = m_videoFile;
+	wavPath.replace_extension(".wav");
 
-	if (std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
+	bool wavOk = m_frames > 0 && this->buildAudioWav(wavPath, videoSeconds);
+	if (wavOk) {
+		// Вызов блокирующий, на длинных записях игра на пару секунд замирает
+		ffmpeg::AudioMixer::mixVideoAudio(
+			m_videoFile.string(), wavPath.string(), m_output.string()
+		);
+	}
+	std::filesystem::remove(wavPath, ec);
+
+	if (wavOk && std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
 		std::filesystem::remove(m_videoFile, ec);
 	} else {
 		// Микс не удался: оставляем хотя бы видео без звука

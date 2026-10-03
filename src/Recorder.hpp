@@ -51,6 +51,10 @@ private:
 	// Добавляет музыку к записанному видео (или просто переименовывает файл)
 	void finishOutput();
 
+	// Декодирует музыку уровня и пишет WAV, длина которого ровно равна длине видео
+	// (с затуханием fade in / fade out). Возвращает false при ошибке.
+	bool buildAudioWav(std::filesystem::path const& wavPath, double seconds);
+
 	bool m_recording = false;
 	bool m_levelUpdated = false;
 	int m_width = 0;
@@ -69,12 +73,10 @@ private:
 	std::filesystem::path m_songPath;
 	bool m_withAudio = false;
 
-	// Контроль скорости: сколько единиц проехал игрок за время видео
-	// (по нему видно, равна ли скорость игры в видео нормальной)
-	double m_oldInterval = 0.0;
-	float m_firstX = 0.f;
-	float m_lastX = 0.f;
-	bool m_haveX = false;
+	// Контроль скорости: процент прохождения в первом и последнем кадре видео
+	float m_startPercent = 0.f;
+	float m_lastPercent = 0.f;
+	bool m_havePercent = false;
 };
 
 } // namespace sr
