@@ -45,8 +45,11 @@ public:
 private:
 	void captureFrame(PlayLayer* layer);
 
-	// Находит файл музыки уровня (пустой путь, если не нашли)
+	// Находит музыку уровня, которую реально можно открыть (пустой путь, если не нашли)
 	static std::filesystem::path findSongPath(GJGameLevel* level);
+
+	// true, если FMOD может открыть этот путь для чтения звука
+	static bool canDecode(std::string const& path);
 
 	// Добавляет музыку к записанному видео (или просто переименовывает файл)
 	void finishOutput();

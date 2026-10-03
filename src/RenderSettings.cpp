@@ -11,6 +11,7 @@ RenderSettings RenderSettings::load() {
 	auto* mod = Mod::get();
 	RenderSettings s;
 
+	s.videoHeight = mod->getSavedValue<int>("video-height", s.videoHeight);
 	s.fps = mod->getSavedValue<int>("fps", s.fps);
 	s.videoBitrateKbps = mod->getSavedValue<int>("video-bitrate-kbps", s.videoBitrateKbps);
 	s.videoCodec = mod->getSavedValue<std::string>("video-codec", s.videoCodec);
@@ -32,6 +33,7 @@ RenderSettings RenderSettings::load() {
 void RenderSettings::save() const {
 	auto* mod = Mod::get();
 
+	mod->setSavedValue("video-height", videoHeight);
 	mod->setSavedValue("fps", fps);
 	mod->setSavedValue("video-bitrate-kbps", videoBitrateKbps);
 	mod->setSavedValue("video-codec", videoCodec);
@@ -48,6 +50,9 @@ void RenderSettings::save() const {
 }
 
 void RenderSettings::sanitize() {
+	videoHeight = std::clamp(videoHeight, 144, 4320);
+	videoHeight -= videoHeight % 2;
+
 	fps = std::clamp(fps, 1, 240);
 	videoBitrateKbps = std::clamp(videoBitrateKbps, 100, 200000);
 	audioBitrateKbps = std::clamp(audioBitrateKbps, 32, 512);

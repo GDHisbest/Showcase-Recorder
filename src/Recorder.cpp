@@ -17,19 +17,67 @@ Recorder& Recorder::get() {
 	return instance;
 }
 
-std::filesystem::path Recorder::findSongPath(GJGameLevel* level) {
-	if (!level) return {};
+bool Recorder::canDecode(std::string const& path) {
+	if (path.empty()) return false;
 
-	std::string path;
-	if (level->m_songID > 0) {
-		// Музыка с Newgrounds / из библиотеки: лежит в папке скачанных песен
-		path = MusicDownloadManager::sharedState()->pathForSong(level->m_songID);
-	} else {
-		// Официальный трек, файл в ресурсах игры
-		auto name = LevelTools::getAudioFileName(level->m_audioTrack);
-		path = CCFileUtils::sharedFileUtils()->fullPathForFilename(name.c_str(), false);
+	auto engine = FMODAudioEngine::sharedEngine();
+	if (!engine || !engine->m_system) return false;
+
+	FMOD::Sound* sound = nullptr;
+	auto result = engine->m_system->createSound(
+		path.c_str(), FMOD_DEFAULT | FMOD_CREATESTREAM | FMOD_OPENONLY, nullptr, &sound
+	);
+	if (result == FMOD_OK && sound) {
+		sound->release();
+		return true;
 	}
-	return path;
+	return false;
+}
+
+std::filesystem::path Recorder::findSongPath(GJGameLevel* level) {
+	std::vector<std::string> candidates;
+
+	if (level) {
+		std::string base;
+		if (level->m_songID > 0) {
+			// Музыка с Newgrounds / из библиотеки
+			base = MusicDownloadManager::sharedState()->pathForSong(level->m_songID);
+		} else {
+			// Официальный трек
+			base = LevelTools::getAudioFileName(level->m_audioTrack);
+		}
+
+		if (!base.empty()) {
+			auto files = CCFileUtils::sharedFileUtils();
+			candidates.push_back(base);
+			candidates.push_back(files->fullPathForFilename(base.c_str(), false));
+			candidates.push_back(files->fullPathForFilename(
+				std::filesystem::path(base).filename().string().c_str(), false
+			));
+		}
+		log::info("Showcase Recorder: level song id {}, official track {}, base path '{}'",
+			level->m_songID, level->m_audioTrack, base);
+	}
+
+	// Запасной вариант: файл, который игра прямо сейчас проигрывает как музыку фона.
+	// Игра уже умеет его открыть, поэтому путь точно подходит.
+	auto engine = FMODAudioEngine::sharedEngine();
+	if (engine && engine->m_backgroundMusicChannel) {
+		FMOD::Sound* playing = nullptr;
+		engine->m_backgroundMusicChannel->getCurrentSound(&playing);
+		if (playing) {
+			char name[1024] = {0};
+			playing->getName(name, sizeof(name));
+			if (name[0]) candidates.push_back(name);
+		}
+	}
+
+	for (auto const& candidate : candidates) {
+		bool ok = canDecode(candidate);
+		log::info("Showcase Recorder: song candidate '{}' -> {}", candidate, ok ? "ok" : "not usable");
+		if (ok) return candidate;
+	}
+	return {};
 }
 
 bool Recorder::start() {
@@ -52,13 +100,12 @@ bool Recorder::start() {
 		auto layer = PlayLayer::get();
 		m_songPath = findSongPath(layer ? layer->m_level : nullptr);
 
-		std::error_code existsEc;
-		if (!m_songPath.empty() && std::filesystem::exists(m_songPath, existsEc)) {
+		if (!m_songPath.empty()) {
 			m_withAudio = true;
 		} else {
-			log::warn("Showcase Recorder: song file not found ('{}'), recording without audio",
-				m_songPath.string());
-			Notification::create("Song file not found, no audio", NotificationIcon::Warning)->show();
+			log::warn("Showcase Recorder: could not open the level song, recording without audio");
+			Notification::create("Could not open the song, recording without audio",
+				NotificationIcon::Warning)->show();
 		}
 	}
 
@@ -67,7 +114,15 @@ bool Recorder::start() {
 		? dir / fmt::format("showcase_{}_video.mp4", stamp)
 		: m_output;
 
-	// Разрешение видео подстраивается под телефон: высота как у экрана,
+#ifdef GEODE_IS_DESKTOP
+	// ПК: разрешение выбирается в настройках (720p ... 8K), ширина 16:9.
+	// Если окно игры другого формата, картинка вписывается с чёрными полосами.
+	int h = std::clamp(s.videoHeight, 144, 4320);
+	int w = static_cast<int>(std::lround(h * 16.0 / 9.0));
+	m_height = h - h % 2;
+	m_width = w - w % 2;
+#else
+	// Android: разрешение подстраивается под телефон: высота как у экрана,
 	// ширина по пропорциям игровой картинки, оба значения чётные
 	auto director = CCDirector::get();
 	auto win = director->getWinSize();
@@ -79,6 +134,7 @@ bool Recorder::start() {
 	int w = std::clamp(static_cast<int>(std::lround(h * (win.width / win.height))), 144, 7680);
 	m_height = h - h % 2;
 	m_width = w - w % 2;
+#endif
 
 	m_fps = s.fps;
 	m_frames = 0;
