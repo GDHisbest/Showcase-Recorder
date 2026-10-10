@@ -186,6 +186,12 @@ bool Recorder::start() {
 	m_ticks = 0;
 	m_levelTicks = 0;
 	m_havePercent = false;
+	m_started = false;
+	m_prevX = 0.f;
+	m_havePrevX = false;
+	m_started = false;
+	m_skippedTicks = 0;
+	m_audioStartMs = 0.0;
 
 	// Offscreen-текстура нужного размера: в неё рисуем уровень для каждого кадра
 	m_texture = CCRenderTexture::create(m_width, m_height, kCCTexture2DPixelFormat_RGBA8888);
@@ -243,11 +249,58 @@ void Recorder::endTick() {
 		log::warn("Showcase Recorder: level updated but PlayLayer::get() is null");
 		return;
 	}
+
+	// После перезапуска уровня кубик стоит на месте примерно секунду, пока игра
+	// не стартует. Это «мёртвое» время в видео не нужно (и музыка в игре
+	// начинается вместе с движением), поэтому кадры пишем с момента, когда кубик
+	// тронулся вперёд. Если за 5 секунд движения нет, пишем всё равно.
+	if (!m_started) {
+		float x = layer->m_player1 ? layer->m_player1->getPositionX() : 0.f;
+		bool moved = m_havePrevX && x > m_prevX + 0.01f;
+		m_prevX = x;
+		m_havePrevX = true;
+
+		if (!moved && m_levelTicks <= m_fps * 5) return;
+
+		m_started = true;
+		log::info("Showcase Recorder: recording starts after {} idle level ticks ({:.2f}s)",
+			m_levelTicks - 1, static_cast<double>(m_levelTicks - 1) / static_cast<double>(m_fps));
+	}
+
 	this->captureFrame(layer);
 }
 
 void Recorder::captureFrame(PlayLayer* layer) {
 	if (!m_recording || !m_texture || !m_recorder || !layer) return;
+
+	// После рестарта уровня кубик появляется не сразу (около секунды), и процент
+	// стоит на 0. Эти кадры не пишем: видео начинается, когда уровень поехал.
+	// Если через 5 секунд ничего не началось (например, нестандартный старт), пишем как есть.
+	if (!m_started) {
+		bool moving = layer->getCurrentPercent() > 0.f;
+		bool timedOut = m_skippedTicks > m_fps * 5;
+		if (!moving && !timedOut) {
+			++m_skippedTicks;
+			return;
+		}
+		m_started = true;
+
+		// Музыка в этот момент играет с какого-то места песни: запоминаем его,
+		// чтобы звук в видео начался с того же места
+		auto engine = FMODAudioEngine::sharedEngine();
+		if (engine && engine->m_backgroundMusicChannel) {
+			int channelCount = 0;
+			engine->m_backgroundMusicChannel->getNumChannels(&channelCount);
+			FMOD::Channel* channel = nullptr;
+			if (channelCount > 0) engine->m_backgroundMusicChannel->getChannel(0, &channel);
+			unsigned int positionMs = 0;
+			if (channel && channel->getPosition(&positionMs, FMOD_TIMEUNIT_MS) == FMOD_OK) {
+				m_audioStartMs = static_cast<double>(positionMs);
+			}
+		}
+		log::info("Showcase Recorder: video starts after {} skipped ticks ({:.2f}s), music at {:.0f} ms",
+			m_skippedTicks, static_cast<double>(m_skippedTicks) / m_fps, m_audioStartMs);
+	}
 
 	// CCRenderTexture::begin() рисует сцену в масштабе экрана, поэтому при другом
 	// размере видео картинка занимает только часть кадра (в левом нижнем углу).
@@ -370,14 +423,20 @@ bool Recorder::buildAudioPcm(std::vector<float>& pcm, int& sampleRate, double se
 	constexpr unsigned int kChunkFrames = 4096;
 	std::vector<uint8_t> chunk(static_cast<size_t>(kChunkFrames) * channels * bytesPerSample);
 	size_t written = 0;
+	// Начало звука = место песни, на котором начался первый записанный кадр
+	size_t skipRemaining = static_cast<size_t>(std::llround(m_audioStartMs / 1000.0 * sampleRate));
 	while (written < totalFrames) {
 		unsigned int want = static_cast<unsigned int>(
-			std::min<size_t>(kChunkFrames, totalFrames - written) * channels * bytesPerSample
+			std::min<size_t>(kChunkFrames, skipRemaining + (totalFrames - written)) * channels * bytesPerSample
 		);
 		unsigned int got = 0;
 		auto r = sound->readData(chunk.data(), want, &got);
 		unsigned int gotFrames = got / (channels * bytesPerSample);
 		for (unsigned int i = 0; i < gotFrames; ++i) {
+			if (skipRemaining > 0) { // пропускаем начало песни до нужного места
+				--skipRemaining;
+				continue;
+			}
 			float samples[2] = {0.f, 0.f};
 			for (int c = 0; c < channels; ++c) {
 				size_t offset = (static_cast<size_t>(i) * channels + c) * bytesPerSample;
@@ -390,10 +449,11 @@ bool Recorder::buildAudioPcm(std::vector<float>& pcm, int& sampleRate, double se
 				}
 			}
 			if (channels == 1) samples[1] = samples[0];
-			pcm[(written + i) * 2] = samples[0];
-			pcm[(written + i) * 2 + 1] = samples[1];
+			pcm[written * 2] = samples[0];
+			pcm[written * 2 + 1] = samples[1];
+			++written;
+			if (written >= totalFrames) break;
 		}
-		written += gotFrames;
 		if (r != FMOD_OK || gotFrames == 0) break; // конец файла или ошибка
 	}
 	sound->release();

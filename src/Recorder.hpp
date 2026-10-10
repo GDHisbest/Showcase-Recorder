@@ -60,6 +60,9 @@ private:
 
 	bool m_recording = false;
 	bool m_levelUpdated = false;
+	bool m_started = false;     // кубик уже тронулся, кадры пишутся
+	float m_prevX = 0.f;        // положение кубика в прошлом тике
+	bool m_havePrevX = false;
 	int m_width = 0;
 	int m_height = 0;
 	int m_fps = 60;
@@ -80,6 +83,12 @@ private:
 	float m_startPercent = 0.f;
 	float m_lastPercent = 0.f;
 	bool m_havePercent = false;
+
+	// Старт записи кадров: ждём, пока в уровне начнётся движение (после рестарта
+	// есть задержка появления кубика), и запоминаем, с какой секунды играет музыка
+	bool m_started = false;
+	int m_skippedTicks = 0;
+	double m_audioStartMs = 0.0;
 };
 
 } // namespace sr
