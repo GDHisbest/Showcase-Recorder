@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 
 using namespace geode::prelude;
 
@@ -17,21 +18,55 @@ Recorder& Recorder::get() {
 	return instance;
 }
 
-bool Recorder::canDecode(std::string const& path) {
-	if (path.empty()) return false;
+namespace {
+
+// Читает файл целиком через файловую систему игры (на Android это умеет читать
+// и ресурсы внутри APK, куда обычный путь для FMOD не ведёт), затем открывает
+// звук FMOD из памяти. data должен жить, пока жив звук.
+FMOD::Sound* openSongFromMemory(std::string const& path, std::vector<uint8_t>& data) {
+	if (path.empty()) return nullptr;
 
 	auto engine = FMODAudioEngine::sharedEngine();
-	if (!engine || !engine->m_system) return false;
+	if (!engine || !engine->m_system) return nullptr;
+
+	data.clear();
+	unsigned long size = 0;
+	unsigned char* raw = CCFileUtils::sharedFileUtils()->getFileData(path.c_str(), "rb", &size);
+	if (raw && size > 0) {
+		data.assign(raw, raw + size);
+	}
+	delete[] raw;
+
+	if (data.empty()) {
+		// Запасной вариант: обычное чтение файла с диска
+		std::ifstream in(path, std::ios::binary);
+		if (in) {
+			data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+	}
+	if (data.empty()) return nullptr;
+
+	FMOD_CREATESOUNDEXINFO info{};
+	info.cbsize = sizeof(info);
+	info.length = static_cast<unsigned int>(data.size());
 
 	FMOD::Sound* sound = nullptr;
 	auto result = engine->m_system->createSound(
-		path.c_str(), FMOD_DEFAULT | FMOD_CREATESTREAM | FMOD_OPENONLY, nullptr, &sound
+		reinterpret_cast<char const*>(data.data()),
+		FMOD_OPENMEMORY | FMOD_OPENONLY, &info, &sound
 	);
-	if (result == FMOD_OK && sound) {
-		sound->release();
-		return true;
-	}
-	return false;
+	if (result != FMOD_OK || !sound) return nullptr;
+	return sound;
+}
+
+} // namespace
+
+bool Recorder::canDecode(std::string const& path) {
+	std::vector<uint8_t> data;
+	auto sound = openSongFromMemory(path, data);
+	if (!sound) return false;
+	sound->release();
+	return true;
 }
 
 std::filesystem::path Recorder::findSongPath(GJGameLevel* level) {
@@ -301,14 +336,10 @@ bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double second
 	if (!engine || !engine->m_system) return false;
 
 	// Открываем файл музыки только для чтения PCM (без воспроизведения)
-	FMOD::Sound* sound = nullptr;
-	auto result = engine->m_system->createSound(
-		m_songPath.string().c_str(),
-		FMOD_DEFAULT | FMOD_CREATESTREAM | FMOD_OPENONLY,
-		nullptr, &sound
-	);
-	if (result != FMOD_OK || !sound) {
-		log::error("Showcase Recorder: cannot open song for decoding ({})", static_cast<int>(result));
+	std::vector<uint8_t> songData;
+	FMOD::Sound* sound = openSongFromMemory(m_songPath.string(), songData);
+	if (!sound) {
+		log::error("Showcase Recorder: cannot open song for decoding ('{}')", m_songPath.string());
 		return false;
 	}
 
@@ -432,19 +463,30 @@ void Recorder::finishOutput() {
 	wavPath.replace_extension(".wav");
 
 	bool wavOk = m_frames > 0 && this->buildAudioWav(wavPath, videoSeconds);
+	bool mixed = false;
 	if (wavOk) {
 		// Вызов блокирующий, на длинных записях игра на пару секунд замирает
-		ffmpeg::AudioMixer::mixVideoAudio(
+		auto mixResult = ffmpeg::AudioMixer::mixVideoAudio(
 			m_videoFile.string(), wavPath.string(), m_output.string()
 		);
+		if (mixResult.isErr()) {
+			auto message = fmt::format("{}", mixResult.unwrapErr());
+			log::error("Showcase Recorder: mixVideoAudio failed: {}", message);
+			if (message.size() > 70) message.resize(70);
+			Notification::create("Mix error: " + message, NotificationIcon::Error, 6.f)->show();
+		} else {
+			mixed = true;
+		}
 	}
-	std::filesystem::remove(wavPath, ec);
 
-	if (wavOk && std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
+	if (mixed && std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
+		std::filesystem::remove(wavPath, ec);
 		std::filesystem::remove(m_videoFile, ec);
 	} else {
-		// Микс не удался: оставляем хотя бы видео без звука
-		log::error("Showcase Recorder: audio mix failed, keeping video without audio");
+		// Микс не удался: оставляем видео и рядом WAV со звуком (чтобы можно было
+		// соединить вручную), итоговый файл = видео без звука
+		log::error("Showcase Recorder: audio mix failed, keeping video and wav separately ({})",
+			wavPath.string());
 		std::filesystem::rename(m_videoFile, m_output, ec);
 		Notification::create("Audio mix failed, saved without audio", NotificationIcon::Warning)->show();
 	}
