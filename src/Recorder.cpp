@@ -187,9 +187,6 @@ bool Recorder::start() {
 	m_levelTicks = 0;
 	m_havePercent = false;
 	m_started = false;
-	m_prevX = 0.f;
-	m_havePrevX = false;
-	m_started = false;
 	m_skippedTicks = 0;
 	m_audioStartMs = 0.0;
 
@@ -248,23 +245,6 @@ void Recorder::endTick() {
 	if (!layer) {
 		log::warn("Showcase Recorder: level updated but PlayLayer::get() is null");
 		return;
-	}
-
-	// После перезапуска уровня кубик стоит на месте примерно секунду, пока игра
-	// не стартует. Это «мёртвое» время в видео не нужно (и музыка в игре
-	// начинается вместе с движением), поэтому кадры пишем с момента, когда кубик
-	// тронулся вперёд. Если за 5 секунд движения нет, пишем всё равно.
-	if (!m_started) {
-		float x = layer->m_player1 ? layer->m_player1->getPositionX() : 0.f;
-		bool moved = m_havePrevX && x > m_prevX + 0.01f;
-		m_prevX = x;
-		m_havePrevX = true;
-
-		if (!moved && m_levelTicks <= m_fps * 5) return;
-
-		m_started = true;
-		log::info("Showcase Recorder: recording starts after {} idle level ticks ({:.2f}s)",
-			m_levelTicks - 1, static_cast<double>(m_levelTicks - 1) / static_cast<double>(m_fps));
 	}
 
 	this->captureFrame(layer);

@@ -60,9 +60,6 @@ private:
 
 	bool m_recording = false;
 	bool m_levelUpdated = false;
-	bool m_started = false;     // кубик уже тронулся, кадры пишутся
-	float m_prevX = 0.f;        // положение кубика в прошлом тике
-	bool m_havePrevX = false;
 	int m_width = 0;
 	int m_height = 0;
 	int m_fps = 60;
