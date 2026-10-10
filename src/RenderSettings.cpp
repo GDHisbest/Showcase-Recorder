@@ -20,6 +20,10 @@ RenderSettings RenderSettings::load() {
 	s.audioCodec = mod->getSavedValue<std::string>("audio-codec", s.audioCodec);
 	s.audioBitrateKbps = mod->getSavedValue<int>("audio-bitrate-kbps", s.audioBitrateKbps);
 
+	s.noEndscreen = mod->getSavedValue<bool>("no-endscreen", s.noEndscreen);
+	s.timeAfterComplete = mod->getSavedValue<float>("time-after-complete", s.timeAfterComplete);
+	s.autoExit = mod->getSavedValue<bool>("auto-exit", s.autoExit);
+
 	s.fadeIn = mod->getSavedValue<float>("fade-in", s.fadeIn);
 	s.fadeOut = mod->getSavedValue<float>("fade-out", s.fadeOut);
 
@@ -42,6 +46,10 @@ void RenderSettings::save() const {
 	mod->setSavedValue("audio-codec", audioCodec);
 	mod->setSavedValue("audio-bitrate-kbps", audioBitrateKbps);
 
+	mod->setSavedValue("no-endscreen", noEndscreen);
+	mod->setSavedValue("time-after-complete", timeAfterComplete);
+	mod->setSavedValue("auto-exit", autoExit);
+
 	mod->setSavedValue("fade-in", fadeIn);
 	mod->setSavedValue("fade-out", fadeOut);
 
@@ -57,6 +65,7 @@ void RenderSettings::sanitize() {
 	videoBitrateKbps = std::clamp(videoBitrateKbps, 100, 200000);
 	audioBitrateKbps = std::clamp(audioBitrateKbps, 32, 512);
 
+	timeAfterComplete = std::clamp(timeAfterComplete, 0.f, 10.f);
 	fadeIn = std::max(0.f, fadeIn);
 	fadeOut = std::max(0.f, fadeOut);
 

@@ -2,9 +2,23 @@
 #include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
+#include <Geode/modify/EndLevelLayer.hpp>
+
 #include "Recorder.hpp"
+#include "RenderSettings.hpp"
 
 using namespace geode::prelude;
+
+// No endscreen: во время записи экран завершения уровня скрывается, поэтому его
+// нет в видео (кадры рисуются из PlayLayer вместе с его дочерними узлами)
+class $modify(SREndLevelLayer, EndLevelLayer) {
+	void customSetup() {
+		EndLevelLayer::customSetup();
+		if (sr::Recorder::get().isRecording() && sr::RenderSettings::current().noEndscreen) {
+			this->setVisible(false);
+		}
+	}
+};
 
 // Во время записи каждый тик планировщика равен ровно 1 / fps секунд игрового
 // времени, а в конце тика пишется ровно один кадр. Поэтому скорость видео
@@ -31,10 +45,10 @@ class $modify(SRPlayLayer, PlayLayer) {
 		sr::Recorder::get().markLevelUpdated();
 	}
 
-	// После прохождения пишем ещё 3 секунды видео, чтобы поймать эффекты
+	// После прохождения пишем ещё заданное время видео, чтобы поймать эффекты
 	void levelComplete() {
 		PlayLayer::levelComplete();
-		sr::Recorder::get().stopAfter(3.f);
+		sr::Recorder::get().stopAfter(sr::RenderSettings::current().timeAfterComplete);
 	}
 
 	// Выход из уровня закрывает файл

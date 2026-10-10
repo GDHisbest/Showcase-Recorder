@@ -22,6 +22,11 @@ struct RenderSettings {
 	std::string videoArgs;
 	std::string audioArgs;
 
+	// После прохождения уровня
+	bool noEndscreen = false;           // скрыть экран завершения уровня в видео
+	float timeAfterComplete = 3.f;      // сколько секунд писать после прохождения
+	bool autoExit = false;              // выйти из уровня, когда запись закончилась
+
 	// Fade в секундах (0 = выключено)
 	float fadeIn = 0.f;
 	float fadeOut = 0.f;

@@ -2,7 +2,9 @@
 
 #include <Geode/Geode.hpp>
 
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -45,6 +47,11 @@ public:
 private:
 	void captureFrame(PlayLayer* layer);
 
+	// Плашка прогресса снизу по центру экрана (процент, скорость рендера, остаток)
+	void createPlate();
+	void updatePlate(PlayLayer* layer, bool force);
+	void removePlate();
+
 	// Находит музыку уровня, которую реально можно открыть (пустой путь, если не нашли)
 	static std::filesystem::path findSongPath(GJGameLevel* level);
 
@@ -65,6 +72,7 @@ private:
 	int m_fps = 60;
 	int m_frames = 0;
 	int m_stopAtFrame = -1;
+	bool m_exitAfterStop = false; // после остановки по прохождению выйти из уровня
 	int m_ticks = 0;        // диагностика: тиков планировщика за запись
 	int m_levelTicks = 0;   // диагностика: тиков, в которых уровень обновлялся
 
@@ -83,6 +91,18 @@ private:
 
 	// Старт записи кадров: ждём, пока в уровне начнётся движение (после рестарта
 	// есть задержка появления кубика), и запоминаем, с какой секунды играет музыка
+	struct Sample {
+		double t;      // реальное время, секунды с начала записи
+		float percent; // процент прохождения уровня
+		int frame;     // сколько кадров уже записано
+	};
+	std::deque<Sample> m_samples;
+	std::chrono::steady_clock::time_point m_realStart;
+	double m_lastPlateUpdate = -1.0;
+	cocos2d::CCNode* m_plate = nullptr;
+	cocos2d::CCLabelBMFont* m_plateLabel = nullptr;
+	cocos2d::CCLayerColor* m_plateFill = nullptr;
+
 	bool m_started = false;
 	int m_skippedTicks = 0;
 	double m_audioStartMs = 0.0;

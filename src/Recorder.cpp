@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <iterator>
 #include <span>
@@ -182,6 +183,7 @@ bool Recorder::start() {
 	m_fps = s.fps;
 	m_frames = 0;
 	m_stopAtFrame = -1;
+	m_exitAfterStop = false;
 	m_levelUpdated = false;
 	m_ticks = 0;
 	m_levelTicks = 0;
@@ -217,6 +219,10 @@ bool Recorder::start() {
 	m_recorder->init(settings);
 
 	m_recording = true;
+	m_samples.clear();
+	m_realStart = std::chrono::steady_clock::now();
+	m_lastPlateUpdate = -1.0;
+	this->createPlate();
 	log::info("Showcase Recorder: started {}x{} @ {} fps, audio={} -> {}",
 		m_width, m_height, m_fps, m_withAudio, m_output.string());
 	if (!s.videoArgs.empty() || !s.audioArgs.empty()) {
@@ -230,6 +236,7 @@ bool Recorder::start() {
 void Recorder::stopAfter(float seconds) {
 	if (!m_recording) return;
 	m_stopAtFrame = m_frames + static_cast<int>(std::lround(seconds * m_fps));
+	m_exitAfterStop = RenderSettings::current().autoExit;
 }
 
 void Recorder::endTick() {
@@ -297,6 +304,10 @@ void Recorder::captureFrame(PlayLayer* layer) {
 	float tx = marginX * win.width / wr;
 	float ty = marginY * win.height / hr;
 
+	// Уровень на экране во время записи скрыт (предпросмотр отключён, это экономит
+	// отрисовку). Для кадра включаем его на время рисования в текстуру.
+	layer->setVisible(true);
+
 	m_texture->beginWithClear(0.f, 0.f, 0.f, 1.f);
 	kmGLMatrixMode(KM_GL_MODELVIEW);
 	kmGLPushMatrix();
@@ -312,6 +323,9 @@ void Recorder::captureFrame(PlayLayer* layer) {
 	m_recorder->writeFrame(m_pixels);
 	++m_frames;
 
+	// Прячем уровень с экрана до следующего кадра
+	layer->setVisible(false);
+
 	// Запоминаем процент прохождения для проверки скорости
 	m_lastPercent = layer->getCurrentPercent();
 	if (!m_havePercent) {
@@ -319,8 +333,17 @@ void Recorder::captureFrame(PlayLayer* layer) {
 		m_havePercent = true;
 	}
 
+	this->updatePlate(layer, false);
+
 	if (m_stopAtFrame >= 0 && m_frames >= m_stopAtFrame) {
+		bool exitLevel = m_exitAfterStop;
 		this->stop();
+		if (exitLevel) {
+			// Выходим уже вне цикла обновления, чтобы не ломать текущий кадр
+			Loader::get()->queueInMainThread([] {
+				if (auto pl = PlayLayer::get()) pl->onQuit();
+			});
+		}
 	}
 }
 
@@ -338,6 +361,10 @@ void Recorder::stop() {
 	}
 	m_pixels.clear();
 	m_pixels.shrink_to_fit();
+
+	// Возвращаем показ уровня и убираем плашку
+	if (auto layer = PlayLayer::get()) layer->setVisible(true);
+	this->removePlate();
 
 	log::info("Showcase Recorder: stopped, ticks={}, level ticks={}, frames={} -> {}",
 		m_ticks, m_levelTicks, m_frames, m_output.string());
@@ -363,6 +390,113 @@ void Recorder::stop() {
 		fmt::format("Saved: {}", m_output.filename().string()),
 		NotificationIcon::Success
 	)->show();
+}
+
+namespace {
+
+std::string formatDuration(double seconds) {
+	if (seconds < 0.0 || seconds > 99.0 * 3600.0) return "--:--";
+	long total = static_cast<long>(std::llround(seconds));
+	long h = total / 3600;
+	long m = (total % 3600) / 60;
+	long sec = total % 60;
+	if (h > 0) return fmt::format("{}:{:02}:{:02}", h, m, sec);
+	return fmt::format("{:02}:{:02}", m, sec);
+}
+
+constexpr float kPlateWidth = 330.f;
+constexpr float kPlateHeight = 26.f;
+
+} // namespace
+
+void Recorder::createPlate() {
+	this->removePlate();
+
+	auto scene = CCDirector::get()->getRunningScene();
+	if (!scene) return;
+
+	auto win = CCDirector::get()->getWinSize();
+
+	m_plate = CCNode::create();
+	m_plate->retain();
+	m_plate->setPosition({win.width / 2.f - kPlateWidth / 2.f, 10.f});
+
+	// Тёмная плашка с неоновой полоской прогресса снизу
+	auto bg = CCLayerColor::create(ccc4(12, 10, 34, 215), kPlateWidth, kPlateHeight);
+	m_plate->addChild(bg);
+
+	m_plateFill = CCLayerColor::create(ccc4(0, 255, 240, 255), 1.f, 3.f);
+	m_plate->addChild(m_plateFill, 1);
+
+	m_plateLabel = CCLabelBMFont::create("Recording...", "bigFont.fnt");
+	m_plateLabel->setScale(0.3f);
+	m_plateLabel->setPosition({kPlateWidth / 2.f, kPlateHeight / 2.f + 2.f});
+	m_plate->addChild(m_plateLabel, 2);
+
+	// Поверх всего, но вне уровня, поэтому в видео плашка не попадает
+	scene->addChild(m_plate, 100000);
+}
+
+void Recorder::removePlate() {
+	if (m_plate) {
+		m_plate->removeFromParentAndCleanup(true);
+		m_plate->release();
+		m_plate = nullptr;
+	}
+	m_plateLabel = nullptr;
+	m_plateFill = nullptr;
+}
+
+void Recorder::updatePlate(PlayLayer* layer, bool force) {
+	if (!m_plate || !m_plateLabel || !layer) return;
+
+	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_realStart).count();
+	float percent = std::clamp(layer->getCurrentPercent(), 0.f, 100.f);
+
+	// Окно последних кадров: по нему считаем скорость рендера и скорость прохождения
+	if (!m_samples.empty()) {
+		auto const& last = m_samples.back();
+		// Долгая пауза или смерть/рестарт (процент упал): замеры начинаем заново
+		if (now - last.t > 5.0 || percent < last.percent - 0.5f) m_samples.clear();
+	}
+	m_samples.push_back({now, percent, m_frames});
+	while (m_samples.size() > 240) m_samples.pop_front();
+
+	// Не перерисовываем текст каждый кадр, достаточно пары раз в секунду
+	if (!force && m_lastPlateUpdate >= 0.0 && now - m_lastPlateUpdate < 0.25) return;
+	m_lastPlateUpdate = now;
+
+	std::string speedText = "--";
+	std::string leftText = "--:--";
+
+	auto const& first = m_samples.front();
+	auto const& last = m_samples.back();
+	double dt = last.t - first.t;
+	int df = last.frame - first.frame;
+
+	if (df >= 10 && dt > 0.0) {
+		double renderFps = static_cast<double>(df) / dt; // кадров видео в реальную секунду
+		speedText = fmt::format("{:.1f} fps ({:.2f}x)", renderFps, renderFps / static_cast<double>(m_fps));
+
+		// Сколько кадров осталось до конца записи
+		double remainingFrames = -1.0;
+		if (m_stopAtFrame >= 0) {
+			// Уровень пройден: осталось дописать хвост после финиша
+			remainingFrames = std::max(0, m_stopAtFrame - m_frames);
+		} else {
+			double perFrame = static_cast<double>(last.percent - first.percent) / static_cast<double>(df);
+			if (perFrame > 1e-6) {
+				// До 100% уровня плюс 3 секунды видео после финиша
+				remainingFrames = (100.0 - static_cast<double>(percent)) / perFrame
+					+ 3.0 * static_cast<double>(m_fps);
+			}
+		}
+		if (remainingFrames >= 0.0) leftText = formatDuration(remainingFrames / renderFps);
+	}
+
+	m_plateLabel->setString(fmt::format("{:.1f}%  |  {}  |  left {}", percent, speedText, leftText).c_str());
+	m_plateLabel->limitLabelWidth(kPlateWidth - 12.f, 0.3f, 0.15f);
+	m_plateFill->setContentSize({std::max(1.f, kPlateWidth * percent / 100.f), 3.f});
 }
 
 bool Recorder::buildAudioPcm(std::vector<float>& pcm, int& sampleRate, double seconds) {
