@@ -86,7 +86,7 @@ bool SettingsPopup::init() {
 	// Y по расстоянию от верхнего края окна (d): удобно, когда высота зависит от платформы
 	auto Y = [](float d) { return H / 2.f - d; };
 
-	if (!Popup::init(400.f, H)) return false;
+	if (!Popup::init(520.f, H)) return false;
 	s_open = true;
 
 	this->setTitle("Showcase Recorder");
@@ -94,13 +94,16 @@ bool SettingsPopup::init() {
 
 	auto* s = &RenderSettings::current();
 
-	constexpr float L = -100.f; // центр левой колонки (видео)
-	constexpr float R = 100.f;  // центр правой колонки (аудио)
+	constexpr float L = -175.f; // центр левой колонки (видео)
+	constexpr float R = 0.f;    // центр средней колонки (аудио)
+	constexpr float O = 175.f;  // центр правой колонки (после прохождения)
 
 	// Тонкая неоновая линия между колонками
-	auto divider = CCLayerColor::create(ccc4(0, 255, 240, 70), 1.f, 165.f);
-	divider->ignoreAnchorPointForPosition(false);
-	m_mainLayer->addChildAtPosition(divider, Anchor::Center, {0.f, Y(139.f + extra)});
+	for (float dx : {-87.f, 87.f}) {
+		auto divider = CCLayerColor::create(ccc4(0, 255, 240, 70), 1.f, 165.f);
+		divider->ignoreAnchorPointForPosition(false);
+		m_mainLayer->addChildAtPosition(divider, Anchor::Center, {dx, Y(139.f + extra)});
+	}
 
 #ifdef GEODE_IS_DESKTOP
 	this->addResolutionRow(Y(41.f)); // между заголовком окна и VIDEO/AUDIO
@@ -108,6 +111,7 @@ bool SettingsPopup::init() {
 
 	this->addHeader("VIDEO", L, Y(35.f + extra), kCyan);
 	this->addHeader("AUDIO", R, Y(35.f + extra), kMagenta);
+	this->addHeader("FINISH", O, Y(35.f + extra), kCyan);
 
 	// Левая колонка: видео
 	this->addStepperRow("FPS", L, Y(59.f + extra),
@@ -154,8 +158,19 @@ bool SettingsPopup::init() {
 		[s] { return s->fadeOut <= 0.f ? std::string("off") : fmt::format("{:.1f}s", s->fadeOut); },
 		[s](int d) { s->fadeOut = std::clamp(s->fadeOut + d * 0.5f, 0.f, 30.f); commit(); });
 
-	// Кнопка запуска записи: стартуем, закрываем окно и перезапускаем уровень,
-	// потому что звук берётся с начала трека
+	// Правая колонка: что делать после прохождения уровня
+	this->addToggleRow("No endscreen", O, Y(59.f + extra), s->noEndscreen,
+		[s](bool on) { s->noEndscreen = on; commit(); });
+
+	this->addStepperRow("Time after complete", O, Y(90.f + extra),
+		[s] { return fmt::format("{:.1f}s", s->timeAfterComplete); },
+		[s](int d) { s->timeAfterComplete = std::clamp(s->timeAfterComplete + d * 0.5f, 0.f, 10.f); commit(); });
+
+	this->addToggleRow("Auto exit on finish", O, Y(121.f + extra), s->autoExit,
+		[s](bool on) { s->autoExit = on; commit(); });
+
+	// Кнопка включения записи: только включает её и закрывает окно. Уровень
+	// игрок перезапускает (или продолжает) сам, кадры пишутся, когда уровень идёт
 	auto recSprite = ButtonSprite::create("Start recording");
 	recSprite->setScale(0.75f);
 	auto recBtn = CCMenuItemExt::createSpriteExtra(recSprite, [this](auto*) {
@@ -163,13 +178,9 @@ bool SettingsPopup::init() {
 			Notification::create("Could not start recording", NotificationIcon::Error)->show();
 			return;
 		}
-		Notification::create("Recording started", NotificationIcon::Success)->show();
+		Notification::create("Recording is on. Restart or resume the level",
+			NotificationIcon::Success)->show();
 		this->keyBackClicked();
-
-		// Перезапуск уровня из паузы: запись и музыка начинаются с начала
-		if (auto pause = CCScene::get()->getChildByType<PauseLayer>(0)) {
-			pause->onRestart(nullptr);
-		}
 	});
 	m_buttonMenu->addChildAtPosition(recBtn, Anchor::Center, {0.f, Y(239.f + extra)});
 
