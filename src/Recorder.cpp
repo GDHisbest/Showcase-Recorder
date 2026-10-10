@@ -63,8 +63,15 @@ std::filesystem::path Recorder::findSongPath(GJGameLevel* level) {
 	// Игра уже умеет его открыть, поэтому путь точно подходит.
 	auto engine = FMODAudioEngine::sharedEngine();
 	if (engine && engine->m_backgroundMusicChannel) {
+		// m_backgroundMusicChannel это ChannelGroup, звук берём у его первого канала
 		FMOD::Sound* playing = nullptr;
-		engine->m_backgroundMusicChannel->getCurrentSound(&playing);
+		FMOD::Channel* channel = nullptr;
+		int channelCount = 0;
+		engine->m_backgroundMusicChannel->getNumChannels(&channelCount);
+		if (channelCount > 0) {
+			engine->m_backgroundMusicChannel->getChannel(0, &channel);
+			if (channel) channel->getCurrentSound(&playing);
+		}
 		if (playing) {
 			char name[1024] = {0};
 			playing->getName(name, sizeof(name));
