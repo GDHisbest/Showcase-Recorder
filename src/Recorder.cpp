@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <span>
 
 using namespace geode::prelude;
 
@@ -331,7 +332,7 @@ void Recorder::stop() {
 	)->show();
 }
 
-bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double seconds) {
+bool Recorder::buildAudioPcm(std::vector<float>& pcm, int& sampleRate, double seconds) {
 	auto engine = FMODAudioEngine::sharedEngine();
 	if (!engine || !engine->m_system) return false;
 
@@ -361,9 +362,9 @@ bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double second
 		return false;
 	}
 
-	int sampleRate = static_cast<int>(std::lround(freq));
+	sampleRate = static_cast<int>(std::lround(freq));
 	size_t totalFrames = static_cast<size_t>(std::llround(seconds * sampleRate));
-	std::vector<float> pcm(totalFrames * 2, 0.f); // стерео, остаток после конца песни = тишина
+	pcm.assign(totalFrames * 2, 0.f); // стерео, остаток после конца песни = тишина
 
 	// Читаем кусками строго с начала песни и сразу переводим в float-стерео
 	constexpr unsigned int kChunkFrames = 4096;
@@ -415,14 +416,43 @@ bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double second
 		}
 	}
 
-	// Пишем WAV: 16 бит, стерео
+	log::info("Showcase Recorder: audio pcm {:.2f}s, {} Hz, song frames read {}/{}",
+		seconds, sampleRate, written, totalFrames);
+	return true;
+}
+
+namespace {
+
+// Приводит интерливленное стерео-аудио к 44100 Гц (именно в такой частоте
+// FFmpeg API кодирует звук), линейной интерполяцией
+std::vector<float> resampleTo44100(std::vector<float> const& in, int rate) {
+	if (rate == 44100 || in.empty()) return in;
+
+	size_t inFrames = in.size() / 2;
+	size_t outFrames = static_cast<size_t>(std::llround(static_cast<double>(inFrames) * 44100.0 / rate));
+	std::vector<float> out(outFrames * 2, 0.f);
+	double ratio = static_cast<double>(rate) / 44100.0;
+	for (size_t i = 0; i < outFrames; ++i) {
+		double pos = static_cast<double>(i) * ratio;
+		size_t i0 = std::min(static_cast<size_t>(pos), inFrames - 1);
+		size_t i1 = std::min(i0 + 1, inFrames - 1);
+		float t = static_cast<float>(pos - static_cast<double>(i0));
+		for (int c = 0; c < 2; ++c) {
+			out[i * 2 + c] = in[i0 * 2 + c] * (1.f - t) + in[i1 * 2 + c] * t;
+		}
+	}
+	return out;
+}
+
+// Запасной вариант: WAV 16 бит, стерео, рядом с видео
+bool writeWav(std::filesystem::path const& wavPath, std::vector<float> const& pcm, int sampleRate) {
 	std::ofstream out(wavPath, std::ios::binary);
 	if (!out) return false;
 
 	auto put32 = [&](uint32_t v) { out.write(reinterpret_cast<char const*>(&v), 4); };
 	auto put16 = [&](uint16_t v) { out.write(reinterpret_cast<char const*>(&v), 2); };
 
-	uint32_t dataBytes = static_cast<uint32_t>(totalFrames * 2 * 2);
+	uint32_t dataBytes = static_cast<uint32_t>(pcm.size() * 2);
 	out.write("RIFF", 4);
 	put32(36 + dataBytes);
 	out.write("WAVEfmt ", 8);
@@ -445,33 +475,39 @@ bool Recorder::buildAudioWav(std::filesystem::path const& wavPath, double second
 		}
 		out.write(reinterpret_cast<char const*>(block.data()), static_cast<std::streamsize>(n * 2));
 	}
-
-	log::info("Showcase Recorder: audio wav {:.2f}s, {} Hz, song frames read {}/{}",
-		seconds, sampleRate, written, totalFrames);
 	return out.good();
 }
+
+} // namespace
 
 void Recorder::finishOutput() {
 	if (!m_withAudio) return; // видео уже записано сразу в итоговый файл
 
 	std::error_code ec;
 
-	// Миксер сжимает звук под длину видео, поэтому даём ему WAV ровно такой же длины:
-	// длина = число записанных кадров / fps, музыка с самого начала, без ускорения.
+	// mixVideoRaw сам считает частоту звука как «число сэмплов / длина видео»,
+	// поэтому даём ему ровно столько звука (44100 Гц, стерео), сколько длится видео:
+	// музыка с самого начала, без ускорения и растягивания.
 	double videoSeconds = static_cast<double>(m_frames) / static_cast<double>(m_fps);
-	auto wavPath = m_videoFile;
-	wavPath.replace_extension(".wav");
 
-	bool wavOk = m_frames > 0 && this->buildAudioWav(wavPath, videoSeconds);
+	std::vector<float> pcm;
+	int sampleRate = 0;
+	bool pcmOk = m_frames > 0 && this->buildAudioPcm(pcm, sampleRate, videoSeconds);
+	if (pcmOk) pcm = resampleTo44100(pcm, sampleRate);
+
 	bool mixed = false;
-	if (wavOk) {
+	if (pcmOk) {
+		auto videoSize = std::filesystem::exists(m_videoFile, ec) ? std::filesystem::file_size(m_videoFile, ec) : 0;
+		log::info("Showcase Recorder: mixing video '{}' ({} bytes) with {} audio samples",
+			m_videoFile.string(), static_cast<unsigned long long>(videoSize), pcm.size());
+
 		// Вызов блокирующий, на длинных записях игра на пару секунд замирает
-		auto mixResult = ffmpeg::AudioMixer::mixVideoAudio(
-			m_videoFile.string(), wavPath.string(), m_output.string()
+		auto mixResult = ffmpeg::AudioMixer::mixVideoRaw(
+			m_videoFile, std::span<float>(pcm.data(), pcm.size()), m_output
 		);
 		if (mixResult.isErr()) {
 			auto message = fmt::format("{}", mixResult.unwrapErr());
-			log::error("Showcase Recorder: mixVideoAudio failed: {}", message);
+			log::error("Showcase Recorder: mixVideoRaw failed: {}", message);
 			if (message.size() > 70) message.resize(70);
 			Notification::create("Mix error: " + message, NotificationIcon::Error, 6.f)->show();
 		} else {
@@ -480,16 +516,23 @@ void Recorder::finishOutput() {
 	}
 
 	if (mixed && std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
-		std::filesystem::remove(wavPath, ec);
 		std::filesystem::remove(m_videoFile, ec);
-	} else {
-		// Микс не удался: оставляем видео и рядом WAV со звуком (чтобы можно было
-		// соединить вручную), итоговый файл = видео без звука
-		log::error("Showcase Recorder: audio mix failed, keeping video and wav separately ({})",
-			wavPath.string());
-		std::filesystem::rename(m_videoFile, m_output, ec);
-		Notification::create("Audio mix failed, saved without audio", NotificationIcon::Warning)->show();
+		return;
 	}
+
+	// Микс не удался: итоговый файл = видео без звука, звук сохраняем рядом WAV-ом,
+	// чтобы его можно было соединить вручную
+	log::error("Showcase Recorder: audio mix failed, keeping video without audio");
+	std::filesystem::remove(m_output, ec);
+	std::filesystem::rename(m_videoFile, m_output, ec);
+	if (pcmOk) {
+		auto wavPath = m_output;
+		wavPath.replace_extension(".wav");
+		if (writeWav(wavPath, pcm, 44100)) {
+			log::info("Showcase Recorder: audio saved separately: {}", wavPath.string());
+		}
+	}
+	Notification::create("Audio mix failed, saved without audio", NotificationIcon::Warning)->show();
 }
 
 } // namespace sr

@@ -54,9 +54,9 @@ private:
 	// Добавляет музыку к записанному видео (или просто переименовывает файл)
 	void finishOutput();
 
-	// Декодирует музыку уровня и пишет WAV, длина которого ровно равна длине видео
-	// (с затуханием fade in / fade out). Возвращает false при ошибке.
-	bool buildAudioWav(std::filesystem::path const& wavPath, double seconds);
+	// Декодирует музыку уровня в стерео float (интерливленное), длина которого ровно
+	// равна длине видео, с затуханием fade in / fade out. Возвращает false при ошибке.
+	bool buildAudioPcm(std::vector<float>& pcm, int& sampleRate, double seconds);
 
 	bool m_recording = false;
 	bool m_levelUpdated = false;
