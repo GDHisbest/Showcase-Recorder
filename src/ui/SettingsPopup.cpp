@@ -103,7 +103,7 @@ bool SettingsPopup::init() {
 	m_mainLayer->addChildAtPosition(divider, Anchor::Center, {0.f, Y(139.f + extra)});
 
 #ifdef GEODE_IS_DESKTOP
-	this->addResolutionRow(Y(42.f));
+	this->addResolutionRow(Y(41.f)); // между заголовком окна и VIDEO/AUDIO
 #endif
 
 	this->addHeader("VIDEO", L, Y(35.f + extra), kCyan);
@@ -186,6 +186,7 @@ void SettingsPopup::addResolutionRow(float y) {
 			kResolutions[i].first, 0, false, "goldFont.fnt",
 			selected ? "GJ_button_01.png" : "GJ_button_04.png", 0.f, 0.5f
 		);
+		spr->setScale(0.75f); // компактные кнопки, чтобы не перекрывали заголовки
 		sprites->push_back(spr);
 
 		auto btn = CCMenuItemExt::createSpriteExtra(spr, [=](auto*) {
@@ -196,7 +197,7 @@ void SettingsPopup::addResolutionRow(float y) {
 				(*sprites)[j]->updateBGImage(j == i ? "GJ_button_01.png" : "GJ_button_04.png");
 			}
 		});
-		m_buttonMenu->addChildAtPosition(btn, Anchor::Center, {-150.f + 75.f * static_cast<float>(i), y});
+		m_buttonMenu->addChildAtPosition(btn, Anchor::Center, {-144.f + 72.f * static_cast<float>(i), y});
 	}
 }
 
