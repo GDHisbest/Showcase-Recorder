@@ -30,17 +30,32 @@ const std::vector<std::string> kVideoCodecs{
 	"h264_amf", "hevc_amf", "h264_qsv", "hevc_qsv",
 	"libx265", "libvpx-vp9", "libsvtav1", "mpeg4"
 };
-const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame", "libopus"};
+const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame"};
 #else
 // Android: программные кодеки и аппаратные через MediaCodec
 const std::vector<std::string> kVideoCodecs{"libx264", "h264_mediacodec", "libx265", "mpeg4"};
-const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame", "libopus"};
+const std::vector<std::string> kAudioCodecs{"aac", "libmp3lame"};
 #endif
 
 // Разрешения для ПК: название кнопки и высота кадра (ширина 16:9)
 const std::vector<std::pair<char const*, int>> kResolutions{
 	{"720p", 720}, {"1080p", 1080}, {"1440p", 1440}, {"4K", 2160}, {"8K", 4320}
 };
+
+#ifndef GEODE_IS_DESKTOP
+// Android: высоты кадра для степпера (ширина 16:9)
+const std::vector<int> kAndroidHeights{720, 1080, 1440, 2160};
+
+std::string resolutionName(int height) {
+	switch (height) {
+		case 720: return "720p";
+		case 1080: return "1080p";
+		case 1440: return "1440p";
+		case 2160: return "4K";
+		default: return fmt::format("{}p", height);
+	}
+}
+#endif
 
 // Переключает значение по кругу на dir (-1 или +1)
 template <class T>
@@ -111,7 +126,7 @@ bool SettingsPopup::init() {
 
 	this->addHeader("VIDEO", L, Y(35.f + extra), kCyan);
 	this->addHeader("AUDIO", R, Y(35.f + extra), kMagenta);
-	this->addHeader("FINISH", O, Y(35.f + extra), kCyan);
+	this->addHeader("OPTIONS", O, Y(35.f + extra), kCyan);
 
 	// Левая колонка: видео
 	this->addStepperRow("FPS", L, Y(59.f + extra),
@@ -168,6 +183,22 @@ bool SettingsPopup::init() {
 
 	this->addToggleRow("Auto exit on finish", O, Y(121.f + extra), s->autoExit,
 		[s](bool on) { s->autoExit = on; commit(); });
+
+#ifndef GEODE_IS_DESKTOP
+	// Android: разрешение кадра 720p ... 4K (на ПК для этого есть ряд кнопок сверху)
+	this->addStepperRow("Resolution", O, Y(152.f + extra),
+		[s] { return resolutionName(s->videoHeight); },
+		[s](int d) {
+			// Если сохранено нестандартное значение, начинаем с ближайшего меньшего
+			if (std::find(kAndroidHeights.begin(), kAndroidHeights.end(), s->videoHeight) == kAndroidHeights.end()) {
+				int nearest = kAndroidHeights.front();
+				for (int hgt : kAndroidHeights) if (hgt <= s->videoHeight) nearest = hgt;
+				s->videoHeight = nearest;
+			}
+			cycle(s->videoHeight, kAndroidHeights, d);
+			commit();
+		});
+#endif
 
 	// Кнопка включения записи: только включает её и закрывает окно. Уровень
 	// игрок перезапускает (или продолжает) сам, кадры пишутся, когда уровень идёт
