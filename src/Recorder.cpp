@@ -1,5 +1,6 @@
 #include "Recorder.hpp"
 #include "RenderSettings.hpp"
+#include "Mp4Fix.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -166,18 +167,26 @@ bool Recorder::start() {
 	m_height = h - h % 2;
 	m_width = w - w % 2;
 #else
-	// Android: разрешение подстраивается под телефон: высота как у экрана,
-	// ширина по пропорциям игровой картинки, оба значения чётные
+	// Android: высота как у экрана телефона, ширина строго 16:9 (как у других ботов:
+	// 1920x1080, 2560x1440 и т.д.). Экран телефона шире, поэтому справа часть
+	// картинки обрезается, а сам кадр получается стандартным и безопасным для кодеков.
 	auto director = CCDirector::get();
-	auto win = director->getWinSize();
 	auto frame = CCEGLView::get()->getFrameSize();
 	float shortSide = std::min(frame.width, frame.height);
 	if (shortSide < 144.f) shortSide = director->getWinSizeInPixels().height;
 
 	int h = std::clamp(static_cast<int>(shortSide), 144, 4320);
-	int w = std::clamp(static_cast<int>(std::lround(h * (win.width / win.height))), 144, 7680);
-	m_height = h - h % 2;
-	m_width = w - w % 2;
+	int w = std::clamp(static_cast<int>(std::lround(h * 16.0 / 9.0)), 144, 7680);
+	// Аппаратный h264_mediacodec копирует кадр в буфер кодека без учёта его stride,
+	// поэтому при «неровной» ширине картинка сдвигается и появляются полосы.
+	// Ширину для него делаем кратной 64 (как 1920, с которым проблем не бывает),
+	// высота может остаться любой чётной (1080 работает). Для программных кодеков
+	// хватает чётных размеров.
+	bool hardware = s.videoCodec.find("mediacodec") != std::string::npos;
+	int alignW = hardware ? 64 : 2;
+	int alignH = 2;
+	m_height = std::max(144, h - h % alignH);
+	m_width = std::max(144, w - w % alignW);
 #endif
 
 	m_fps = s.fps;
@@ -199,6 +208,13 @@ bool Recorder::start() {
 		return false;
 	}
 	m_texture->retain();
+	{
+		// Диагностика: реальный размер текстуры в пикселях должен совпасть с размером видео
+		auto px = m_texture->getSprite()->getTexture()->getContentSizeInPixels();
+		log::info("Showcase Recorder: render texture {}x{} px (video {}x{}), content scale {}, codec {}",
+			static_cast<int>(px.width), static_cast<int>(px.height), m_width, m_height,
+			CCDirector::get()->getContentScaleFactor(), s.videoCodec);
+	}
 
 	size_t bytes = static_cast<size_t>(m_width) * m_height * 4;
 	m_pixels.assign(bytes, 0);
@@ -289,20 +305,16 @@ void Recorder::captureFrame(PlayLayer* layer) {
 			m_skippedTicks, static_cast<double>(m_skippedTicks) / m_fps, m_audioStartMs);
 	}
 
-	// CCRenderTexture::begin() рисует сцену в масштабе экрана, поэтому при другом
-	// размере видео картинка занимает только часть кадра (в левом нижнем углу).
-	// Компенсируем масштабом: вписываем экран в кадр целиком, по краям чёрные полосы.
+	// CCRenderTexture::begin() рисует сцену в масштабе экрана пиксель в пиксель от
+	// левого нижнего угла. Как у других ботов: подгоняем только высоту кадра под
+	// высоту экрана, а по ширине берём то, что поместилось слева (лишнее справа
+	// обрезается, проценты и кубик остаются на тех же местах, что и у них).
 	auto director = CCDirector::get();
-	auto win = director->getWinSize();           // в поинтах
 	auto winPx = director->getWinSizeInPixels(); // в пикселях экрана
 
-	float wr = winPx.width / static_cast<float>(m_width);
-	float hr = winPx.height / static_cast<float>(m_height);
-	float s = std::min(1.f / wr, 1.f / hr);
-	float marginX = (1.f - wr * s) * 0.5f;
-	float marginY = (1.f - hr * s) * 0.5f;
-	float tx = marginX * win.width / wr;
-	float ty = marginY * win.height / hr;
+	float s = static_cast<float>(m_height) / winPx.height;
+	float tx = 0.f;
+	float ty = 0.f;
 
 	// Уровень на экране во время записи скрыт (предпросмотр отключён, это экономит
 	// отрисовку). Для кадра включаем его на время рисования в текстуру.
@@ -691,6 +703,11 @@ void Recorder::finishOutput() {
 
 	if (mixed && std::filesystem::exists(m_output, ec) && std::filesystem::file_size(m_output, ec) > 0) {
 		std::filesystem::remove(m_videoFile, ec);
+
+		// Микшер не пишет в MP4 конфиг AAC-потока, из-за чего плееры отказываются играть
+		// звук («mp4a не поддерживается»). Дописываем его сами.
+		bool fixed = fixMp4AudioConfig(m_output);
+		log::info("Showcase Recorder: audio header fix applied: {}", fixed);
 		return;
 	}
 
