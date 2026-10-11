@@ -159,35 +159,21 @@ bool Recorder::start() {
 		? dir / fmt::format("showcase_{}_video.mp4", stamp)
 		: m_output;
 
-#ifdef GEODE_IS_DESKTOP
-	// ПК: разрешение выбирается в настройках (720p ... 8K), ширина 16:9.
-	// Если окно игры другого формата, картинка вписывается с чёрными полосами.
+	// Разрешение выбирается в настройках (ПК: 720p ... 8K, Android: 720p ... 4K).
+	// Кадр всегда 16:9, как у других ботов: берётся вся высота экрана и слева столько
+	// ширины, сколько нужно кадру, лишнее справа обрезается (см. captureFrame).
 	int h = std::clamp(s.videoHeight, 144, 4320);
 	int w = static_cast<int>(std::lround(h * 16.0 / 9.0));
-	m_height = h - h % 2;
-	m_width = w - w % 2;
-#else
-	// Android: высота как у экрана телефона, ширина строго 16:9 (как у других ботов:
-	// 1920x1080, 2560x1440 и т.д.). Экран телефона шире, поэтому справа часть
-	// картинки обрезается, а сам кадр получается стандартным и безопасным для кодеков.
-	auto director = CCDirector::get();
-	auto frame = CCEGLView::get()->getFrameSize();
-	float shortSide = std::min(frame.width, frame.height);
-	if (shortSide < 144.f) shortSide = director->getWinSizeInPixels().height;
 
-	int h = std::clamp(static_cast<int>(shortSide), 144, 4320);
-	int w = std::clamp(static_cast<int>(std::lround(h * 16.0 / 9.0)), 144, 7680);
 	// Аппаратный h264_mediacodec копирует кадр в буфер кодека без учёта его stride,
 	// поэтому при «неровной» ширине картинка сдвигается и появляются полосы.
-	// Ширину для него делаем кратной 64 (как 1920, с которым проблем не бывает),
-	// высота может остаться любой чётной (1080 работает). Для программных кодеков
-	// хватает чётных размеров.
+	// Ширину для него делаем кратной 64 (1280, 1920, 2560, 3840 уже кратны),
+	// высота может остаться любой чётной. Для программных кодеков хватает чётных.
 	bool hardware = s.videoCodec.find("mediacodec") != std::string::npos;
 	int alignW = hardware ? 64 : 2;
 	int alignH = 2;
 	m_height = std::max(144, h - h % alignH);
 	m_width = std::max(144, w - w % alignW);
-#endif
 
 	m_fps = s.fps;
 	m_frames = 0;
