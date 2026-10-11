@@ -305,28 +305,33 @@ void Recorder::captureFrame(PlayLayer* layer) {
 			m_skippedTicks, static_cast<double>(m_skippedTicks) / m_fps, m_audioStartMs);
 	}
 
-	// CCRenderTexture::begin() рисует сцену в масштабе экрана пиксель в пиксель от
-	// левого нижнего угла. Как у других ботов: подгоняем только высоту кадра под
-	// высоту экрана, а по ширине берём то, что поместилось слева (лишнее справа
-	// обрезается, проценты и кубик остаются на тех же местах, что и у них).
-	auto director = CCDirector::get();
-	auto winPx = director->getWinSizeInPixels(); // в пикселях экрана
-
-	float s = static_cast<float>(m_height) / winPx.height;
-	float tx = 0.f;
-	float ty = 0.f;
+	// Проекцию и вьюпорт задаём сами, не полагаясь на CCRenderTexture::begin()
+	// (он зависит от масштаба текстур игры и на телефоне давал уменьшенную картинку).
+	// Как у других ботов: берём всю высоту экрана (320 поинтов) и слева столько
+	// ширины, сколько нужно кадру 16:9. Лишнее справа обрезается, проценты и кубик
+	// остаются на тех же местах, что у них. Если экран уже кадра, справа будет чёрное.
+	auto win = CCDirector::get()->getWinSize(); // в поинтах
+	float visibleW = win.height * static_cast<float>(m_width) / static_cast<float>(m_height);
 
 	// Уровень на экране во время записи скрыт (предпросмотр отключён, это экономит
 	// отрисовку). Для кадра включаем его на время рисования в текстуру.
 	layer->setVisible(true);
 
 	m_texture->beginWithClear(0.f, 0.f, 0.f, 1.f);
+
+	// Текстура может оказаться больше кадра (масштаб содержимого), поэтому рисуем
+	// и читаем строго левый нижний угол размером с кадр
+	glViewport(0, 0, m_width, m_height);
+
+	kmGLMatrixMode(KM_GL_PROJECTION);
+	kmGLLoadIdentity();
+	kmMat4 ortho;
+	kmMat4OrthographicProjection(&ortho, 0.f, visibleW, 0.f, win.height, -1024.f, 1024.f);
+	kmGLMultMatrix(&ortho);
 	kmGLMatrixMode(KM_GL_MODELVIEW);
-	kmGLPushMatrix();
-	kmGLTranslatef(tx, ty, 0.f);
-	kmGLScalef(s, s, 1.f);
+	kmGLLoadIdentity();
+
 	layer->visit();
-	kmGLPopMatrix();
 	glReadPixels(0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, m_pixels.data());
 	m_texture->end();
 
